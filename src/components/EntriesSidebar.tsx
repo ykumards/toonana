@@ -116,18 +116,18 @@ export function EntriesSidebar({
       initial={{ x: -20, opacity: 0 }}
       animate={{ x: 0, opacity: 1 }}
       transition={{ duration: 0.3 }}
-      className="w-full bg-gradient-to-b from-slate-50 to-slate-100 border-r border-slate-200 flex flex-col h-full"
+      className="w-full bg-card border-r border-border flex flex-col h-full"
     >
       {/* Modern Header */}
-      <div className="p-3 sm:p-4 border-b border-slate-200 bg-white/80 backdrop-blur-sm">
+      <div className="p-3 sm:p-4 border-b border-slate-800 bg-slate-900/80 backdrop-blur-sm">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <div className="p-1.5 sm:p-2 bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg text-white shadow-lg">
               <BookOpen className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
             <div>
-              <h1 className="text-base sm:text-lg font-bold text-slate-900">Toonana</h1>
-              <p className="text-xs text-slate-500 hidden sm:block">{entries?.length || 0} entries</p>
+              <h1 className="text-base sm:text-lg font-bold text-white">Toonana</h1>
+              <p className="text-xs text-slate-400 hidden sm:block">{entries?.length || 0} entries</p>
             </div>
           </div>
           <Button
@@ -150,7 +150,7 @@ export function EntriesSidebar({
             placeholder="Search entries... (⌘K)"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-9 sm:pl-10 pr-3 py-1.5 sm:py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs sm:text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+            className="w-full pl-9 sm:pl-10 pr-3 py-1.5 sm:py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs sm:text-sm placeholder:text-slate-400 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
           />
         </div>
       </div>
@@ -164,7 +164,7 @@ export function EntriesSidebar({
               animate={{ opacity: 1 }}
               className="flex flex-col items-center justify-center py-12 text-slate-400"
             >
-              <div className="p-3 bg-slate-100 rounded-full mb-3">
+              <div className="p-3 bg-slate-800 rounded-full mb-3">
                 <Clock className="animate-spin" size={24} />
               </div>
               <p className="text-sm font-medium">Loading entries...</p>
@@ -180,7 +180,7 @@ export function EntriesSidebar({
                   <div className="p-4 bg-gradient-to-br from-slate-100 to-slate-200 rounded-full mb-4">
                     <Search size={32} />
                   </div>
-                  <p className="text-sm font-medium text-slate-600 mb-1">No entries found for "{searchQuery}"</p>
+                  <p className="text-sm font-medium text-slate-300 mb-1">No entries found for "{searchQuery}"</p>
                   <Button
                     onClick={() => setSearchQuery("")}
                     variant="outline"
@@ -194,7 +194,7 @@ export function EntriesSidebar({
                   <div className="p-4 bg-gradient-to-br from-slate-100 to-slate-200 rounded-full mb-4">
                     <FileText size={32} />
                   </div>
-                  <p className="text-sm font-medium text-slate-600 mb-1">No entries yet</p>
+                  <p className="text-sm font-medium text-slate-300 mb-1">No entries yet</p>
                   <p className="text-xs text-slate-400 mb-4">Start writing your first journal entry</p>
                   <Button
                     onClick={onNewEntry}
@@ -221,8 +221,8 @@ export function EntriesSidebar({
                     {/* Date Group Header */}
                     <div className="flex items-center gap-2 px-2 py-1">
                       <Calendar className="text-slate-400" size={14} />
-                      <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">{groupName}</span>
-                      <span className="ml-auto text-xs px-2 py-0.5 bg-slate-200 text-slate-600 rounded-full">
+                      <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">{groupName}</span>
+                      <span className="ml-auto text-xs px-2 py-0.5 bg-slate-700 text-slate-300 rounded-full">
                         {groupEntries.length}
                       </span>
                     </div>
@@ -233,10 +233,10 @@ export function EntriesSidebar({
                         key={entry.id}
                         className={cn(
                           "group relative p-2 sm:p-3 rounded-lg cursor-pointer transition-all",
-                          "hover:shadow-md hover:bg-white",
+                          "hover:shadow-md hover:bg-slate-800",
                           entry.id === selectedId
-                            ? "bg-gradient-to-r from-blue-50 to-blue-100 border border-blue-200 shadow-md"
-                            : "bg-white border border-slate-200"
+                            ? "bg-gradient-to-r from-blue-900/50 to-blue-800/50 border border-blue-700 shadow-md"
+                            : "bg-slate-850 border border-slate-700"
                         )}
                       >
                         {/* Hover Trash Icon */}
@@ -253,13 +253,13 @@ export function EntriesSidebar({
                           </button>
                         )}
                         <div onClick={() => onEntrySelect(entry.id)}>
-                        <p className="text-xs text-slate-500 mb-1">
+                        <p className="text-xs text-slate-400 mb-1">
                           <Clock className="inline mr-1 w-2.5 h-2.5" />
                           {formatEntryDate(entry.created_at)}
                         </p>
                         <p className={cn(
                           "text-xs sm:text-sm break-words",
-                          entry.id === selectedId ? "text-blue-900" : "text-slate-700"
+                          entry.id === selectedId ? "text-blue-300" : "text-slate-200"
                         )} style={{ 
                           overflow: "hidden",
                           textOverflow: "ellipsis",

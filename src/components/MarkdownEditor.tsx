@@ -120,13 +120,13 @@ export function MarkdownEditor({
   }), []);
 
   return (
-    <div className={cn("flex flex-col h-full bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm", className)}>
+    <div className={cn("flex flex-col h-full bg-slate-900 rounded-xl border border-slate-800 overflow-hidden shadow-sm", className)}>
       {/* Modern Mode Toggle */}
-      <div className="flex items-center justify-between px-3 sm:px-6 py-2 sm:py-3 border-b border-slate-200 bg-gradient-to-b from-slate-50 to-white">
-        <div className="relative flex bg-slate-100 rounded-lg p-1">
+      <div className="flex items-center justify-between px-3 sm:px-6 py-2 sm:py-3 border-b border-slate-800 bg-slate-900">
+        <div className="relative flex bg-slate-800 rounded-lg p-1">
           <div
             className={cn(
-              "absolute top-1 h-8 bg-white rounded-md shadow-sm transition-all duration-200",
+              "absolute top-1 h-8 bg-slate-700 rounded-md shadow-sm transition-all duration-200",
               mode === "edit" ? "left-1 w-[72px]" : "left-[80px] w-[88px]"
             )}
           />
@@ -134,7 +134,7 @@ export function MarkdownEditor({
             onClick={() => setMode("edit")}
             className={cn(
               "relative z-10 flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 text-xs sm:text-sm font-medium transition-colors duration-200",
-              mode === "edit" ? "text-slate-900" : "text-slate-500 hover:text-slate-700"
+              mode === "edit" ? "text-foreground" : "text-muted-foreground hover:text-foreground"
             )}
           >
             <Edit3 size={14} />
@@ -144,7 +144,7 @@ export function MarkdownEditor({
             onClick={() => setMode("preview")}
             className={cn(
               "relative z-10 flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 text-xs sm:text-sm font-medium transition-colors duration-200",
-              mode === "preview" ? "text-slate-900" : "text-slate-500 hover:text-slate-700"
+              mode === "preview" ? "text-foreground" : "text-muted-foreground hover:text-foreground"
             )}
           >
             <Eye size={14} />
@@ -172,9 +172,9 @@ export function MarkdownEditor({
                 onBlur={() => setFocused(false)}
                 placeholder={placeholder}
                 className={cn(
-                  "flex-1 p-3 sm:p-4 lg:p-6 font-sans text-sm sm:text-base leading-relaxed text-slate-900 bg-transparent resize-none overflow-y-auto",
-                  "placeholder:text-slate-400 placeholder:leading-relaxed",
-                  "focus:outline-none focus:bg-gradient-to-b focus:from-blue-50/50 focus:to-transparent",
+                  "flex-1 p-3 sm:p-4 lg:p-6 font-sans text-sm sm:text-base leading-relaxed text-white bg-slate-900 resize-none overflow-y-auto",
+                  "placeholder:text-slate-500 placeholder:leading-relaxed",
+                  "focus:outline-none focus:bg-slate-900/95",
                   "transition-colors duration-200"
                 )}
                 spellCheck="true"
@@ -187,10 +187,10 @@ export function MarkdownEditor({
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 10 }}
               transition={{ duration: 0.15 }}
-              className="flex-1 p-3 sm:p-4 lg:p-6 overflow-y-auto"
+              className="flex-1 p-3 sm:p-4 lg:p-6 overflow-y-auto bg-slate-900"
             >
               {value.trim() ? (
-                <div className="prose prose-slate prose-lg max-w-none">
+                <div className="prose prose-invert prose-lg max-w-none">
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
                     components={markdownComponents}
@@ -200,7 +200,7 @@ export function MarkdownEditor({
                 </div>
               ) : (
                 <div className="flex items-center justify-center h-full">
-                  <p className="text-slate-400 italic">Nothing to preview yet. Switch to Write mode to start writing.</p>
+                  <p className="text-muted-foreground italic">Nothing to preview yet. Switch to Write mode to start writing.</p>
                 </div>
               )}
             </motion.div>

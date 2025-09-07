@@ -288,7 +288,8 @@ export default function App() {
   });
 
   return (
-    <div className="h-screen w-full overflow-hidden dark bg-background">
+    <div className="dark">
+    <div className="h-screen w-full overflow-hidden bg-background">
       <div className="flex h-full relative">
         {/* Mobile overlay */}
         {sidebarOpen && (
@@ -500,6 +501,7 @@ Keyboard shortcuts:
           setProgressOpen(false);
         }}
       />
+    </div>
     </div>
   );
 }
