@@ -162,4 +162,4 @@ This project is licensed under the MIT License.
 
 ## IDE Setup
 
-- Zed editor (preferred) + Tauri + rust-analyzer (or VS Code + Tauri + rust-analyzer)
+- [Zed](https://zed.dev) (preferred) + Tauri + rust-analyzer (or VS Code + Tauri + rust-analyzer)
