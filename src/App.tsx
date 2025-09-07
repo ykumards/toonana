@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
-import { Save, Sparkles, Settings, Check, Loader2, Menu, X } from "lucide-react";
+import { Save, Sparkles, Settings, Check, Loader2, Menu, X, CalendarDays } from "lucide-react";
 import { EntriesSidebar } from "./components/EntriesSidebar";
 import { MarkdownEditor } from "./components/MarkdownEditor";
 import { SettingsModal } from "./components/SettingsModal";
@@ -11,6 +11,7 @@ import { Button } from "./components/ui/button";
 import { motion } from "framer-motion";
 import "./App.css";
 import { ComicProgressModal } from "./components/ComicProgressModal";
+import { GalleryModal } from "./components/GalleryModal";
 
 type OllamaHealth = {
   ok: boolean;
@@ -107,6 +108,7 @@ export default function App() {
   const [progressOpen, setProgressOpen] = useState(false);
   const [ollamaHealth, setOllamaHealth] = useState<OllamaHealth | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [galleryOpen, setGalleryOpen] = useState(false);
 
   const upsert = useMutation({
     mutationFn: async () => {
@@ -349,6 +351,15 @@ export default function App() {
                 {/* Action Buttons */}
                 <div className="flex items-center gap-1 sm:gap-2">
                   <Button
+                    onClick={() => setGalleryOpen(true)}
+                    variant="secondary"
+                    size="sm"
+                    title="Gallery"
+                  >
+                    <CalendarDays className="w-4 h-4" />
+                    <span className="hidden lg:inline">Gallery</span>
+                  </Button>
+                  <Button
                     onClick={() => setSettingsOpen(true)}
                     variant="outline"
                     size="sm"
@@ -414,6 +425,14 @@ Keyboard shortcuts:
         </motion.div>
       </div>
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <GalleryModal
+        open={galleryOpen}
+        onClose={() => setGalleryOpen(false)}
+        onSelect={(entryId) => {
+          setGalleryOpen(false);
+          loadEntry(entryId);
+        }}
+      />
       <ComicProgressModal
         open={progressOpen}
         status={comicStatus}

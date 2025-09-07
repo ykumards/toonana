@@ -82,6 +82,19 @@ struct AppHealth {
     has_vault_key: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct ComicItem {
+    entry_id: String,
+    image_path: String,
+    created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ComicsByDay {
+    date: String,
+    comics: Vec<ComicItem>,
+}
+
 // ===== Tauri Commands =====
 
 #[tauri::command]
@@ -239,6 +252,80 @@ async fn export_pdf(
     Ok(())
 }
 
+#[tauri::command]
+async fn list_comics_by_day(
+    state: tauri::State<'_, AppState>,
+    limit_days: Option<i64>,
+) -> Result<Vec<ComicsByDay>, String> {
+    use std::collections::BTreeMap;
+    use std::fs;
+    use std::path::Path;
+
+    let limit_days = limit_days.unwrap_or(120);
+
+    // Fetch recent entries
+    let entries = list_entries(
+        &state.db,
+        Some(ListParams { limit: Some(2000), offset: Some(0) }),
+    )
+    .await?;
+
+    let mut by_day: BTreeMap<String, Vec<ComicItem>> = BTreeMap::new();
+
+    for e in entries.into_iter() {
+        let created = e.created_at.clone();
+        let day = created.split('T').next().unwrap_or("").to_string();
+        if day.is_empty() { continue; }
+
+        let entry_img_dir = state.data_dir.join("images").join(&e.id);
+        if !entry_img_dir.exists() { continue; }
+
+        // Find the newest generated image in the entry image folder
+        let mut best_path: Option<(String, std::time::SystemTime)> = None;
+        if let Ok(rd) = fs::read_dir(&entry_img_dir) {
+            for ent in rd.flatten() {
+                let path = ent.path();
+                if !path.is_file() { continue; }
+                let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                let ext_ok = path.extension().and_then(|s| s.to_str()).map(|ext| {
+                    matches!(ext.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "webp")
+                }).unwrap_or(false);
+                if !ext_ok { continue; }
+                // Prefer the composite result image if present
+                if !file_name.contains("-result") { /* still acceptable */ }
+                let meta = ent.metadata().ok();
+                let modified = meta.and_then(|m| m.modified().ok()).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                let path_str = path.display().to_string();
+                match &best_path {
+                    Some((_, ts)) if modified <= *ts => {}
+                    _ => { best_path = Some((path_str, modified)); }
+                }
+            }
+        }
+
+        if let Some((img_path, _)) = best_path {
+            by_day.entry(day).or_default().push(ComicItem {
+                entry_id: e.id,
+                image_path: img_path,
+                created_at: created,
+            });
+        }
+    }
+
+    // Convert to Vec, sort by date desc, and optionally limit by recent days
+    let mut items: Vec<(String, Vec<ComicItem>)> = by_day.into_iter().collect();
+    items.sort_by(|a, b| b.0.cmp(&a.0));
+
+    // Apply limit_days by truncating to that many unique days
+    let items: Vec<ComicsByDay> = items
+        .into_iter()
+        .take(limit_days as usize)
+        .map(|(date, comics)| ComicsByDay { date, comics })
+        .collect();
+
+    Ok(items)
+}
+
 // ===== Startup and Main =====
 
 static STARTUP: Lazy<Result<AppState>> = Lazy::new(|| tauri_startup());
@@ -286,7 +373,8 @@ pub fn run() {
             cancel_job,
             ollama_health,
             ollama_list_models,
-            ollama_generate
+            ollama_generate,
+            list_comics_by_day
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
