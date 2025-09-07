@@ -15,7 +15,6 @@ type AvatarModalProps = {
 export function AvatarModal({ open, onClose, onSaved }: AvatarModalProps) {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [avatar, setAvatar] = useState<string>("");
   const [generating, setGenerating] = useState(false);
   const [genStep, setGenStep] = useState<number>(0);
   const [previews, setPreviews] = useState<string[]>([]);
@@ -24,6 +23,7 @@ export function AvatarModal({ open, onClose, onSaved }: AvatarModalProps) {
   const [error, setError] = useState<string | null>(null);
   const existingSrc = existingPath ? convertFileSrc(existingPath) : null;
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const [selectedFilePreview, setSelectedFilePreview] = useState<string | null>(null);
 
   const toDataUrl = (b64: string) => (b64.startsWith("data:") ? b64 : `data:image/png;base64,${b64}`);
   const preloadImage = (src: string) => new Promise<void>((resolve, reject) => {
@@ -42,11 +42,11 @@ export function AvatarModal({ open, onClose, onSaved }: AvatarModalProps) {
         setLoading(true);
         const s = await invoke<Settings>("get_settings");
         if (cancelled) return;
-        setAvatar(s?.avatar_description || "");
         setExistingPath(s?.avatar_image_path || null);
         setPreviews([]);
         setSelectedIdx(null);
         setError(null);
+        setSelectedFilePreview(null);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -59,7 +59,7 @@ export function AvatarModal({ open, onClose, onSaved }: AvatarModalProps) {
       setSaving(true);
       setError(null);
       const s = await invoke<Settings>("get_settings");
-      const updated = { ...(s || {}), avatar_description: avatar } as Settings;
+      const updated = { ...(s || {}), avatar_description: null } as Settings;
       await invoke<Settings>("update_settings", { settings: updated });
       if (selectedIdx != null) {
         const b64 = previews[selectedIdx];
@@ -67,7 +67,7 @@ export function AvatarModal({ open, onClose, onSaved }: AvatarModalProps) {
         const savedPath = await invoke<string>("save_avatar_image", { base64Png: raw });
         setExistingPath(savedPath);
       }
-      onSaved?.(avatar);
+      onSaved?.(null);
       onClose();
     } catch (e) {
       console.error("Save avatar failed", e);
@@ -85,10 +85,12 @@ export function AvatarModal({ open, onClose, onSaved }: AvatarModalProps) {
       setError(null);
       setPreviews([]);
       setSelectedIdx(null);
-      const description = avatar;
+      if (!selectedFilePreview) {
+        throw new Error("Please select a photo first");
+      }
       setGenStep(1);
-      // Kick off background job and start polling like Cartoonify
-      const id = await invoke<string>("create_avatar_job", { description });
+      // Start cartoonify job and poll
+      const id = await invoke<string>("create_cartoonify_job", { dataUri: selectedFilePreview });
       // Poll loop
       const poll = async () => {
         try {
@@ -149,6 +151,25 @@ export function AvatarModal({ open, onClose, onSaved }: AvatarModalProps) {
     }
   };
 
+  const handleFileChange = async (file: File | null) => {
+    try {
+      setError(null);
+      setPreviews([]);
+      setSelectedIdx(null);
+      if (!file) { setSelectedFilePreview(null); return; }
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(new Error("Failed to read file"));
+        reader.readAsDataURL(file);
+      });
+      setSelectedFilePreview(dataUrl);
+    } catch (e) {
+      console.error(e);
+      setError("Could not read the selected file");
+    }
+  };
+
   if (!open) return null;
 
   return (
@@ -164,18 +185,26 @@ export function AvatarModal({ open, onClose, onSaved }: AvatarModalProps) {
             <div className="text-slate-400">Loading…</div>
           ) : (
             <>
-              <p className="text-sm text-slate-400">
-                Describe yourself as a stylized character. We'll use this as your avatar in comics.
-                Mention hair, clothing, vibe, key accessories, and any defining traits.
-              </p>
-              <textarea
-                value={avatar}
-                onChange={(e) => setAvatar(e.target.value)}
-                placeholder="e.g., A cheerful 30‑something with short wavy hair, round glasses, cozy earth‑tone sweater, denim jacket with enamel pins, always carrying a sketchbook; warm, curious vibe."
-                className="w-full min-h-40 px-3 py-2 border border-slate-700 rounded-md bg-slate-800 text-white placeholder:text-slate-500"
-              />
-              <div className="text-xs text-slate-400">
-                Tip: Keep it concise but evocative (2‑4 sentences). We'll integrate this into prompts later.
+              <p className="text-sm text-slate-400">Upload a photo, then we'll cartoonify it into your avatar.</p>
+              <div className="flex items-center gap-4">
+                <label className="cursor-pointer inline-flex items-center gap-2 px-3 py-2 rounded-md border border-slate-700 bg-slate-800 text-white hover:bg-slate-700">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => handleFileChange(e.target.files?.[0] || null)}
+                    className="hidden"
+                  />
+                  <span>Choose photo…</span>
+                </label>
+                {selectedFilePreview && (
+                  <button
+                    onClick={() => setLightboxSrc(selectedFilePreview)}
+                    className="relative border rounded-md overflow-hidden border-slate-700"
+                    title="Click to expand selected photo"
+                  >
+                    <img src={selectedFilePreview} alt="Selected" className="w-16 h-16 object-cover" />
+                  </button>
+                )}
               </div>
               <div className="flex items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
@@ -219,8 +248,8 @@ export function AvatarModal({ open, onClose, onSaved }: AvatarModalProps) {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button onClick={handleGenerate} disabled={generating || !avatar.trim()} className="px-3 py-2 rounded-md bg-accent-500 text-white hover:bg-accent-600 disabled:opacity-50">
-                    {generating ? "Generating…" : "Generate preview"}
+                  <button onClick={handleGenerate} disabled={generating || !selectedFilePreview} className="px-3 py-2 rounded-md bg-accent-500 text-white hover:bg-accent-600 disabled:opacity-50">
+                    {generating ? "Generating…" : "Cartoonify photo"}
                   </button>
                 </div>
               </div>

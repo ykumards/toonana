@@ -27,6 +27,7 @@ use crate::database::{
 use crate::settings::{load_settings_from_dir, save_settings_to_dir, Settings};
 use crate::utils::{db_path, ensure_data_dir};
 use crate::comic::{decode_base64_png, guess_image_extension};
+use crate::gemini::cartoonify_image_with_progress;
 
 // kept for potential future re-enable of encryption
 #[allow(dead_code)]
@@ -339,7 +340,9 @@ async fn create_avatar_job(
 
     let job_id_for_task = job_id.clone();
     let handle = tokio::spawn(async move {
-        let settings = load_settings_from_dir(&data_dir);
+        let mut settings = load_settings_from_dir(&data_dir);
+        // Do not condition avatar generation on previously saved avatar image
+        settings.avatar_image_path = None;
         let full_prompt = gemini::build_avatar_image_prompt(&description);
         tracing::info!(job_id = %job_id_for_task, desc_len = description.len(), "avatar job: started");
 
@@ -430,6 +433,94 @@ async fn create_avatar_job(
 }
 
 #[tauri::command]
+async fn create_cartoonify_job(
+    state: tauri::State<'_, AppState>,
+    data_uri: String,
+) -> Result<JobId, String> {
+    // Parse data URI: data:<mime>;base64,<data>
+    let (mime, b64) = if data_uri.starts_with("data:") {
+        let split_idx = data_uri.find(",").ok_or_else(|| "invalid data URI".to_string())?;
+        let header = &data_uri[..split_idx];
+        let data = &data_uri[split_idx + 1..];
+        let mime = header
+            .strip_prefix("data:")
+            .and_then(|s| s.split(';').next())
+            .unwrap_or("image/png")
+            .to_string();
+        (mime, data.to_string())
+    } else {
+        // Assume PNG if no data: prefix; treat entire string as base64
+        ("image/png".to_string(), data_uri)
+    };
+
+    let job_id = Uuid::new_v4().to_string();
+    state.avatar_status.insert(job_id.clone(), AvatarJobStatus {
+        job_id: job_id.clone(),
+        updated_at: now_iso(),
+        stage: AvatarStage::Queued,
+        image_base64: None,
+    });
+
+    let data_dir = state.data_dir.clone();
+    let status_map = state.avatar_status.clone();
+    let job_id_for_task = job_id.clone();
+    let handle = tokio::spawn(async move {
+        let settings = load_settings_from_dir(&data_dir);
+        tracing::info!(job_id = %job_id_for_task, "cartoonify job: started");
+        let mut last_tick: u32 = 0;
+        let update_progress = |completed: u32, total: u32| {
+            status_map.insert(job_id_for_task.clone(), AvatarJobStatus {
+                job_id: job_id_for_task.clone(),
+                updated_at: now_iso(),
+                stage: AvatarStage::Rendering { completed, total },
+                image_base64: None,
+            });
+        };
+
+        let res = cartoonify_image_with_progress(&b64, &mime, &settings, |c, t| {
+            if c > last_tick && c % 5 == 0 { last_tick = c; }
+            update_progress(c, t);
+        }).await;
+
+        match res {
+            Ok(b64_out) => {
+                let data_uri = if b64_out.starts_with("data:") { b64_out } else {
+                    match decode_base64_png(&b64_out) {
+                        Ok(bytes) => {
+                            let mime = match guess_image_extension(&bytes) {
+                                "jpg" => "image/jpeg",
+                                "webp" => "image/webp",
+                                _ => "image/png",
+                            };
+                            format!("data:{};base64,{}", mime, b64_out)
+                        }
+                        Err(_) => format!("data:image/png;base64,{}", b64_out),
+                    }
+                };
+                status_map.insert(job_id_for_task.clone(), AvatarJobStatus {
+                    job_id: job_id_for_task.clone(),
+                    updated_at: now_iso(),
+                    stage: AvatarStage::Done,
+                    image_base64: Some(data_uri),
+                });
+            }
+            Err(e) => {
+                tracing::error!(job_id = %job_id_for_task, error = %e, "cartoonify job: failed");
+                status_map.insert(job_id_for_task.clone(), AvatarJobStatus {
+                    job_id: job_id_for_task.clone(),
+                    updated_at: now_iso(),
+                    stage: AvatarStage::Failed { error: e },
+                    image_base64: None,
+                });
+            }
+        }
+    });
+
+    state.jobs.insert(job_id.clone(), handle);
+    Ok(job_id)
+}
+
+#[tauri::command]
 async fn get_avatar_job_status(
     state: tauri::State<'_, AppState>,
     job_id: String,
@@ -479,6 +570,21 @@ async fn save_avatar_image(base64_png: String) -> Result<String, String> {
     s.avatar_image_path = Some(path.display().to_string());
     save_settings_to_dir(&state.data_dir, &s).map_err(|e| e.to_string())?;
     Ok(path.display().to_string())
+}
+
+#[tauri::command]
+async fn delete_avatar_image() -> Result<(), String> {
+    let state = STARTUP.as_ref().map_err(|e| e.to_string())?.clone();
+    let mut s = load_settings_from_dir(&state.data_dir);
+    if let Some(path_str) = s.avatar_image_path.take() {
+        let p = std::path::Path::new(&path_str);
+        if p.exists() {
+            let _ = std::fs::remove_file(p);
+            tracing::info!(path = %p.display(), "avatar: deleted image from disk");
+        }
+    }
+    save_settings_to_dir(&state.data_dir, &s).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -621,9 +727,11 @@ pub fn run() {
             list_comics_by_day
             , generate_avatar_image
             , save_avatar_image
+            , delete_avatar_image
             , create_avatar_job
             , get_avatar_job_status
             , cancel_avatar_job
+            , create_cartoonify_job
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

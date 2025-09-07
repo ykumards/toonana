@@ -348,7 +348,7 @@ pub async fn generate_image_once(prompt: &str, settings: &Settings) -> Result<St
         .connect_timeout(Duration::from_secs(10))
         .build()?;
     let resp = client
-        .post(url)
+        .post(&url)
         .header("X-goog-api-key", api_key)
         .json(&body)
         .send()
@@ -574,7 +574,76 @@ pub async fn generate_image_once(prompt: &str, settings: &Settings) -> Result<St
         return Ok(B64.encode(bytes));
     }
 
-    Err(anyhow!("gemini image: no inline image data in response"))
+    // Retry once with stricter guidance and extra diagnostics
+    info!("gemini(once): no image found, retrying with stricter IMAGE-only guidance");
+    let mut retry_parts: Vec<serde_json::Value> = vec![serde_json::json!({ "text": build_prompt_with_avatar_text(prompt, settings) })];
+    if let Some(img_part) = try_build_avatar_image_part(settings) {
+        retry_parts.push(img_part);
+    }
+    let retry_body = serde_json::json!({
+        "contents": [
+            { "role": "user", "parts": retry_parts }
+        ],
+        // Nudge the model harder toward emitting an image part only
+        "systemInstruction": { "parts": [ { "text": "Return exactly one IMAGE. Do not include any text parts. If unsafe, return an IMAGE-only safe illustration." } ] },
+        "generationConfig": {
+            "responseModalities": ["IMAGE"],
+            "temperature": 0.1
+        }
+    });
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .connect_timeout(Duration::from_secs(10))
+        .build()?;
+    let retry_resp = client
+        .post(&url)
+        .header("X-goog-api-key", settings
+            .gemini_api_key
+            .clone()
+            .or_else(|| std::env::var("GEMINI_API_KEY").ok())
+            .context("Gemini API key not set")?)
+        .json(&retry_body)
+        .send()
+        .await
+        .context("gemini image retry request failed")?;
+    if !retry_resp.status().is_success() {
+        let status = retry_resp.status();
+        let text = retry_resp.text().await.unwrap_or_else(|_| "<no body>".into());
+        error!(http = %status, body = %text, "gemini image error (once retry)");
+        return Err(anyhow!("gemini image failed (retry): HTTP {} - {}", status, text));
+    }
+    let retry_value: serde_json::Value = retry_resp.json().await
+        .context("gemini image retry parse error")?;
+    if let Some(s) = find_image_data(&retry_value) {
+        info!("gemini non-streaming image generation completed (retry)");
+        return Ok(s);
+    }
+    if let Some(uri) = find_http_uri(&retry_value) {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .connect_timeout(Duration::from_secs(10))
+            .build()?;
+        let mut req = client.get(uri.clone());
+        if uri.contains("generativelanguage.googleapis.com") {
+            if let Some(key) = settings
+                .gemini_api_key
+                .clone()
+                .or_else(|| std::env::var("GEMINI_API_KEY").ok())
+            { req = req.header("X-goog-api-key", key); }
+        }
+        let bytes = req.send().await
+            .map_err(|e| anyhow!("gemini once retry: fetch uri failed: {}", e))?
+            .bytes().await
+            .map_err(|e| anyhow!("gemini once retry: read uri bytes failed: {}", e))?;
+        info!("gemini non-streaming image fetched via file URI (retry)");
+        return Ok(B64.encode(bytes));
+    }
+
+    // Log a compact sample of the retry JSON to aid diagnosis
+    let sample = serde_json::to_string(&retry_value).unwrap_or_default();
+    let sample = if sample.len() > 800 { format!("{}...", &sample[..800]) } else { sample };
+    error!(sample = %sample, "gemini(once): no image data in retry response");
+    Err(anyhow!("gemini image: no inline image data in response (after retry)"))
 }
 
 pub async fn generate_image_with_progress(
@@ -601,7 +670,7 @@ fn build_prompt_with_avatar_text(prompt: &str, settings: &Settings) -> String {
 }
 
 pub fn build_avatar_image_prompt(description: &str) -> String {
-    format!(r#"Task: Render exactly one IMAGE of a single character portrait avatar.
+    format!(r#"Task: Render exactly one IMAGE of a single character portrait avatar in cartoon style.
 
 Output Rules:
 - Return IMAGE output only (no text content in the response).
@@ -609,11 +678,9 @@ Output Rules:
 
 Framing & Style:
 - Waist-up framing, clean neutral background, neutral lighting.
-- Keep the character identity consistent across future images.
-- Illustration vibe; cohesive, appealing, readable at small sizes.
 
 Deliverable:
-- One portrait image.
+- One portrait image in cartoon style.
 
 Character Description:
 {}"#, description)
@@ -635,6 +702,338 @@ fn try_build_avatar_image_part(settings: &Settings) -> Option<serde_json::Value>
     Some(serde_json::json!({
         "inlineData": { "mimeType": mime, "data": b64 }
     }))
+}
+
+// Build a prompt to cartoonify a provided real photo into a stylized avatar
+pub fn build_cartoonify_prompt() -> String {
+    r#"Task: Transform the provided person photo into a clean, stylized cartoon portrait avatar.
+
+Output Rules:
+- Return IMAGE output only (no text parts in the response).
+- No watermarks, UI elements, or captions.
+
+Framing & Style:
+- Waist-up framing, clean neutral background, neutral lighting.
+- Keep the person's identity: hair style, face shape, and key features should remain recognizable.
+- Produce a polished, illustration-like look suitable for an avatar.
+
+Deliverable:
+- One portrait image in cartoon style of the same person in the photo."#.to_string()
+}
+
+#[instrument(skip(settings, on_progress), fields(model = "gemini-2.5-flash-image-preview"))]
+pub async fn cartoonify_image_stream_progress(
+    source_image_b64: &str,
+    source_mime: &str,
+    settings: &Settings,
+    mut on_progress: impl FnMut(u32, u32),
+) -> Result<String> {
+    // Reuse streaming machinery; change only the request parts
+    let api_key = settings
+        .gemini_api_key
+        .clone()
+        .or_else(|| std::env::var("GEMINI_API_KEY").ok())
+        .context("Gemini API key not set")?;
+
+    let model_id = "gemini-2.5-flash-image-preview";
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent",
+        model_id
+    );
+
+    let parts: Vec<serde_json::Value> = vec![
+        serde_json::json!({ "text": build_cartoonify_prompt() }),
+        serde_json::json!({ "inlineData": { "mimeType": source_mime, "data": source_image_b64 } }),
+    ];
+
+    let body = serde_json::json!({
+        "contents": [
+            { "role": "user", "parts": parts }
+        ],
+        "generationConfig": { "responseModalities": ["IMAGE"] }
+    });
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(90))
+        .connect_timeout(Duration::from_secs(10))
+        .build()?;
+    info!(parts_len = 2usize, "gemini(stream cartoonify): sending request");
+    let resp = client
+        .post(url)
+        .header("X-goog-api-key", api_key.clone())
+        .json(&body)
+        .send()
+        .await
+        .context("gemini cartoonify image request failed")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_else(|_| "<no body>".into());
+        error!(http = %status, body = %text, "gemini image error (stream cartoonify)");
+        return Err(anyhow!("gemini image error: HTTP {} - {}", status, text));
+    }
+
+    // Copy streaming parsing from generate_image_stream_progress
+    let mut latest_b64: Option<String> = None;
+    let mut latest_http_uri: Option<String> = None;
+    let mut progress: u32 = 1;
+    let total: u32 = 100;
+    on_progress(progress, total);
+
+    let mut buf = String::new();
+    let mut last_json_debug: Option<String> = None;
+    let mut stream = resp.bytes_stream();
+
+    while let Some(chunk) = stream.next().await {
+        let bytes = chunk.map_err(|e| anyhow!("gemini stream error: {}", e))?;
+        let s = String::from_utf8_lossy(&bytes);
+        buf.push_str(&s);
+        let mut start = 0usize;
+        for (i, ch) in buf.char_indices() {
+            if ch == '\n' {
+                let mut line = &buf[start..i];
+                if !line.trim().is_empty() {
+                    if let Some(stripped) = line.strip_prefix("data: ") { line = stripped; }
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                        if last_json_debug.is_none() {
+                            let s = serde_json::to_string(&json).unwrap_or_default();
+                            let sample = if s.len() > 600 { format!("{}...", &s[..600]) } else { s };
+                            last_json_debug = Some(sample);
+                        }
+                        // reuse extractors
+                        fn find_image_data(v: &serde_json::Value) -> Option<String> {
+                            fn find_data_uri_in_any_string(v: &serde_json::Value) -> Option<String> {
+                                match v {
+                                    serde_json::Value::String(s) => {
+                                        if s.starts_with("data:image/") { return Some(s.to_string()); }
+                                        None
+                                    }
+                                    serde_json::Value::Array(arr) => {
+                                        for item in arr { if let Some(u) = find_data_uri_in_any_string(item) { return Some(u); } }
+                                        None
+                                    }
+                                    serde_json::Value::Object(map) => {
+                                        for (_k, val) in map.iter() { if let Some(u) = find_data_uri_in_any_string(val) { return Some(u); } }
+                                        None
+                                    }
+                                    _ => None,
+                                }
+                            }
+                            if let Some(obj) = v.as_object() {
+                                for key in ["inlineData", "inline_data"] {
+                                    if let Some(inline) = obj.get(key) {
+                                        if let Some(data) = inline.get("data").and_then(|d| d.as_str()) { if !data.is_empty() { return Some(data.to_string()); } }
+                                    }
+                                }
+                                for key in ["bytesBase64Encoded", "b64_json"] {
+                                    if let Some(s) = obj.get(key).and_then(|d| d.as_str()) { if !s.is_empty() { return Some(s.to_string()); } }
+                                }
+                                if let Some(media) = obj.get("media").and_then(|m| m.as_array()) {
+                                    for m in media {
+                                        if let Some(inline) = m.get("inlineData").or_else(|| m.get("inline_data")) {
+                                            if let Some(data) = inline.get("data").and_then(|d| d.as_str()) { if !data.is_empty() { return Some(data.to_string()); } }
+                                        }
+                                    }
+                                }
+                                for key in ["dataUris", "data_uris"] {
+                                    if let Some(arr) = obj.get(key).and_then(|a| a.as_array()) {
+                                        for s in arr { if let Some(u) = s.as_str() { if !u.is_empty() { return Some(u.to_string()); } } }
+                                    }
+                                }
+                                for key in ["fileData", "file_data"] {
+                                    if let Some(fd) = obj.get(key) {
+                                        if let Some(uri) = fd.get("fileUri").or_else(|| fd.get("file_uri")).and_then(|u| u.as_str()) { if uri.starts_with("data:") { return Some(uri.to_string()); } }
+                                    }
+                                }
+                                if let Some(uri) = find_data_uri_in_any_string(v) { return Some(uri); }
+                            }
+                            match v {
+                                serde_json::Value::Array(arr) => { for item in arr { if let Some(s) = find_image_data(item) { return Some(s); } } None }
+                                serde_json::Value::Object(map) => { for (_k, val) in map.iter() { if let Some(s) = find_image_data(val) { return Some(s); } } None }
+                                _ => None,
+                            }
+                        }
+                        fn find_http_uri(v: &serde_json::Value) -> Option<String> {
+                            if let Some(obj) = v.as_object() {
+                                for key in ["fileData", "file_data"] {
+                                    if let Some(fd) = obj.get(key) {
+                                        if let Some(uri) = fd.get("fileUri").or_else(|| fd.get("file_uri")).and_then(|u| u.as_str()) {
+                                            if uri.starts_with("http://") || uri.starts_with("https://") { return Some(uri.to_string()); }
+                                        }
+                                    }
+                                }
+                                for key in ["dataUris", "data_uris"] {
+                                    if let Some(arr) = obj.get(key).and_then(|a| a.as_array()) {
+                                        for s in arr { if let Some(u) = s.as_str() { if u.starts_with("http://") || u.starts_with("https://") { return Some(u.to_string()); } } }
+                                    }
+                                }
+                            }
+                            match v {
+                                serde_json::Value::Array(arr) => { for item in arr { if let Some(u) = find_http_uri(item) { return Some(u); } } None }
+                                serde_json::Value::Object(map) => { for (_k, val) in map.iter() { if let Some(u) = find_http_uri(val) { return Some(u); } } None }
+                                _ => None,
+                            }
+                        }
+                        if let Some(s) = find_image_data(&json) { latest_b64 = Some(s); }
+                        if latest_http_uri.is_none() { latest_http_uri = find_http_uri(&json); }
+                    }
+                }
+                start = i + 1;
+                if progress < 98 { progress = progress.saturating_add(2); on_progress(progress, total); }
+            }
+        }
+        if start > 0 { buf = buf[start..].to_string(); }
+    }
+
+    on_progress(99, total);
+    let out = if let Some(b64) = latest_b64 {
+        b64
+    } else if let Some(uri) = latest_http_uri {
+        let mut req = client.get(uri.clone());
+        if uri.contains("generativelanguage.googleapis.com") { req = req.header("X-goog-api-key", api_key.clone()); }
+        let bytes = req.send().await
+            .map_err(|e| anyhow!("gemini cartoonify stream: fetch uri failed: {}", e))?
+            .bytes().await
+            .map_err(|e| anyhow!("gemini cartoonify stream: read uri bytes failed: {}", e))?;
+        info!(fetched_bytes = bytes.len(), uri = %uri, "gemini(stream cartoonify): fetched image via HTTP URI");
+        B64.encode(bytes)
+    } else {
+        if let Some(sample) = last_json_debug.as_ref() { error!(sample = %sample, "gemini(stream cartoonify): no image data received"); }
+        else { error!("gemini(stream cartoonify): no image data received"); }
+        return Err(anyhow!("gemini stream: no image data received"));
+    };
+    on_progress(100, total);
+    info!("gemini streaming cartoonify completed");
+    Ok(out)
+}
+
+#[instrument(skip(settings))]
+pub async fn generate_image_once_cartoonify(
+    source_image_b64: &str,
+    source_mime: &str,
+    settings: &Settings,
+) -> Result<String> {
+    let api_key = settings
+        .gemini_api_key
+        .clone()
+        .or_else(|| std::env::var("GEMINI_API_KEY").ok())
+        .context("Gemini API key not set")?;
+
+    let model_id = "gemini-2.5-flash-image-preview";
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
+        model_id
+    );
+
+    let parts: Vec<serde_json::Value> = vec![
+        serde_json::json!({ "text": build_cartoonify_prompt() }),
+        serde_json::json!({ "inlineData": { "mimeType": source_mime, "data": source_image_b64 } }),
+    ];
+
+    let body = serde_json::json!({
+        "contents": [ { "role": "user", "parts": parts } ],
+        "generationConfig": { "responseModalities": ["IMAGE"] }
+    });
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .connect_timeout(Duration::from_secs(10))
+        .build()?;
+    let resp = client
+        .post(&url)
+        .header("X-goog-api-key", api_key)
+        .json(&body)
+        .send()
+        .await
+        .context("gemini cartoonify image request failed")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_else(|_| "<no body>".into());
+        error!(http = %status, body = %text, "gemini image error (once cartoonify)");
+        return Err(anyhow!("gemini image error: HTTP {} - {}", status, text));
+    }
+
+    let value: serde_json::Value = resp.json().await.context("gemini cartoonify parse error")?;
+    // Reuse extractor from above
+    fn find_image_data(v: &serde_json::Value) -> Option<String> {
+        fn find_data_uri_in_any_string(v: &serde_json::Value) -> Option<String> {
+            match v {
+                serde_json::Value::String(s) => { if s.starts_with("data:image/") { return Some(s.to_string()); } None }
+                serde_json::Value::Array(arr) => { for item in arr { if let Some(u) = find_data_uri_in_any_string(item) { return Some(u); } } None }
+                serde_json::Value::Object(map) => { for (_k, val) in map.iter() { if let Some(u) = find_data_uri_in_any_string(val) { return Some(u); } } None }
+                _ => None,
+            }
+        }
+        if let Some(obj) = v.as_object() {
+            for key in ["inlineData", "inline_data"] { if let Some(inline) = obj.get(key) { if let Some(data) = inline.get("data").and_then(|d| d.as_str()) { if !data.is_empty() { return Some(data.to_string()); } } } }
+            for key in ["bytesBase64Encoded", "b64_json"] { if let Some(s) = obj.get(key).and_then(|d| d.as_str()) { if !s.is_empty() { return Some(s.to_string()); } } }
+            if let Some(media) = obj.get("media").and_then(|m| m.as_array()) { for m in media { if let Some(inline) = m.get("inlineData").or_else(|| m.get("inline_data")) { if let Some(data) = inline.get("data").and_then(|d| d.as_str()) { if !data.is_empty() { return Some(data.to_string()); } } } } }
+            for key in ["dataUris", "data_uris"] { if let Some(arr) = obj.get(key).and_then(|a| a.as_array()) { for s in arr { if let Some(u) = s.as_str() { if !u.is_empty() { return Some(u.to_string()); } } } } }
+            for key in ["fileData", "file_data"] { if let Some(fd) = obj.get(key) { if let Some(uri) = fd.get("fileUri").or_else(|| fd.get("file_uri")).and_then(|u| u.as_str()) { if uri.starts_with("data:") { return Some(uri.to_string()); } } } }
+            if let Some(uri) = find_data_uri_in_any_string(v) { return Some(uri); }
+        }
+        match v {
+            serde_json::Value::Array(arr) => { for item in arr { if let Some(s) = find_image_data(item) { return Some(s); } } None }
+            serde_json::Value::Object(map) => { for (_k, val) in map.iter() { if let Some(s) = find_image_data(val) { return Some(s); } } None }
+            _ => None,
+        }
+    }
+    if let Some(s) = find_image_data(&value) { info!("gemini non-streaming cartoonify completed"); return Ok(s); }
+
+    // Try to locate an HTTP file URI and fetch it
+    fn find_http_uri(v: &serde_json::Value) -> Option<String> {
+        if let Some(obj) = v.as_object() {
+            for key in ["fileData", "file_data"] {
+                if let Some(fd) = obj.get(key) {
+                    if let Some(uri) = fd.get("fileUri").or_else(|| fd.get("file_uri")).and_then(|u| u.as_str()) {
+                        if uri.starts_with("http://") || uri.starts_with("https://") { return Some(uri.to_string()); }
+                    }
+                }
+            }
+            for key in ["dataUris", "data_uris"] {
+                if let Some(arr) = obj.get(key).and_then(|a| a.as_array()) {
+                    for s in arr { if let Some(u) = s.as_str() { if u.starts_with("http://") || u.starts_with("https://") { return Some(u.to_string()); } } }
+                }
+            }
+        }
+        match v {
+            serde_json::Value::Array(arr) => { for item in arr { if let Some(u) = find_http_uri(item) { return Some(u); } } None }
+            serde_json::Value::Object(map) => { for (_k, val) in map.iter() { if let Some(u) = find_http_uri(val) { return Some(u); } } None }
+            _ => None,
+        }
+    }
+    if let Some(uri) = find_http_uri(&value) {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .connect_timeout(Duration::from_secs(10))
+            .build()?;
+        let bytes = client.get(uri.clone()).send().await
+            .map_err(|e| anyhow!("gemini once cartoonify: fetch uri failed: {}", e))?
+            .bytes().await
+            .map_err(|e| anyhow!("gemini once cartoonify: read uri bytes failed: {}", e))?;
+        info!("gemini non-streaming cartoonify fetched via file URI");
+        return Ok(B64.encode(bytes));
+    }
+
+    let sample = serde_json::to_string(&value).unwrap_or_default();
+    let sample = if sample.len() > 800 { format!("{}...", &sample[..800]) } else { sample };
+    error!(sample = %sample, "gemini(once cartoonify): no image data in response");
+    Err(anyhow!("gemini image: no inline image data in response"))
+}
+
+pub async fn cartoonify_image_with_progress(
+    source_image_b64: &str,
+    source_mime: &str,
+    settings: &Settings,
+    on_progress: impl FnMut(u32, u32),
+) -> Result<String, String> {
+    match cartoonify_image_stream_progress(source_image_b64, source_mime, settings, on_progress).await {
+        Ok(b64) => Ok(b64),
+        Err(_) => generate_image_once_cartoonify(source_image_b64, source_mime, settings)
+            .await
+            .map_err(|e| format!("gemini cartoonify failed: {}", e)),
+    }
 }
 
 // Nano-Banana integration
