@@ -114,7 +114,7 @@ export function EntriesSidebar({
       initial={{ x: -20, opacity: 0 }}
       animate={{ x: 0, opacity: 1 }}
       transition={{ duration: 0.3 }}
-      className="w-full sm:w-72 lg:w-80 bg-gradient-to-b from-slate-50 to-slate-100 border-r border-slate-200 flex flex-col h-full absolute sm:relative z-20 sm:z-auto"
+      className="w-full bg-gradient-to-b from-slate-50 to-slate-100 border-r border-slate-200 flex flex-col h-full"
     >
       {/* Modern Header */}
       <div className="p-3 sm:p-4 border-b border-slate-200 bg-white/80 backdrop-blur-sm">
@@ -227,43 +227,35 @@ export function EntriesSidebar({
                     
                     {/* Entries */}
                     {groupEntries.map((entry) => (
-                      <motion.div
+                      <div
                         key={entry.id}
-                        whileHover={{ scale: 1.02 }}
-                        whileTap={{ scale: 0.98 }}
                         onClick={() => onEntrySelect(entry.id)}
                         className={cn(
-                          "relative p-2 sm:p-3 rounded-lg cursor-pointer transition-all",
+                          "p-2 sm:p-3 rounded-lg cursor-pointer transition-all",
                           "hover:shadow-md hover:bg-white",
                           entry.id === selectedId
                             ? "bg-gradient-to-r from-blue-50 to-blue-100 border border-blue-200 shadow-md"
                             : "bg-white border border-slate-200"
                         )}
                       >
-                        {entry.id === selectedId && (
-                          <motion.div
-                            layoutId="selectedIndicator"
-                            className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-blue-500 rounded-r-full"
-                          />
-                        )}
-                        <div className="flex items-start justify-between">
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs text-slate-500 mb-1">
-                              <Clock className="inline mr-1 w-2.5 h-2.5" />
-                              {formatEntryDate(entry.created_at)}
-                            </p>
-                            <p className={cn(
-                              "text-xs sm:text-sm truncate",
-                              entry.id === selectedId ? "text-blue-900" : "text-slate-700"
-                            )}>
-                              {entry.body_preview || "Empty entry"}
-                            </p>
-                          </div>
-                          {getMoodEmoji(entry.mood) && (
-                            <span className="text-lg">{getMoodEmoji(entry.mood)}</span>
-                          )}
-                        </div>
-                      </motion.div>
+                        <p className="text-xs text-slate-500 mb-1">
+                          <Clock className="inline mr-1 w-2.5 h-2.5" />
+                          {formatEntryDate(entry.created_at)}
+                        </p>
+                        <p className={cn(
+                          "text-xs sm:text-sm break-words",
+                          entry.id === selectedId ? "text-blue-900" : "text-slate-700"
+                        )} style={{ 
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          display: "-webkit-box",
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: "vertical",
+                          maxWidth: "100%"
+                        }}>
+                          {entry.body_preview || "Empty entry"}
+                        </p>
+                      </div>
                     ))}
                   </motion.div>
                 ))}

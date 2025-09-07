@@ -11,6 +11,7 @@ use crate::database::{get_entry_body, now_iso};
 use crate::gemini::{generate_image_with_progress, nano_banana_generate_image};
 use crate::ollama::generate_streaming;
 use crate::settings::load_settings_from_dir;
+use tracing::{info, warn, error, debug, instrument};
 
 pub type JobId = String;
 
@@ -73,6 +74,17 @@ pub fn guess_image_extension(bytes: &[u8]) -> &'static str {
     "png"
 }
 
+fn build_gemini_image_prompt(storyboard_text: &str, style: &str) -> String {
+    // A structured, style-aware prompt for image models (e.g., Gemini image, Flux Kontext-like)
+    // Keeps the storyboard as source-of-truth while guiding layout and aesthetics
+    format!(
+        "Task: Render a single-page comic with 4–6 panels from the storyboard.\n\nStyle: {}\nLayout Guidelines:\n- Arrange panels left-to-right, top-to-bottom in a clean grid.\n- Keep characters consistent across panels (appearance, clothing, hair).\n- Include speech bubbles and captions exactly as written in the storyboard.\n- Avoid extra text, UI, or watermarks beyond bubbles/captions.\n- Maintain clear line art, readable bubbles, cohesive backgrounds.\n- Tone: light, charming, hopeful.\n\nOutput: One coherent multi-panel comic page image.\n\nStoryboard:\n{}",
+        style,
+        storyboard_text
+    )
+}
+
+#[instrument(skip(status_map, db_pool, data_root), fields(job_id = %job_id, entry_id = %entry_id, style = %style))]
 pub async fn create_comic_job(
     job_id: String,
     entry_id: String,
@@ -87,6 +99,7 @@ pub async fn create_comic_job(
     
     tokio::spawn(async move {
         // Step 1: Parse entry
+        info!("comic job queued -> parsing");
         status_map.insert(jid.clone(), ComicJobStatus {
             job_id: jid.clone(),
             entry_id: eid.clone(),
@@ -99,6 +112,7 @@ pub async fn create_comic_job(
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
 
         // Step 2: Storyboard
+        debug!("comic job -> storyboarding");
         status_map.insert(jid.clone(), ComicJobStatus {
             job_id: jid.clone(),
             entry_id: eid.clone(),
@@ -112,6 +126,7 @@ pub async fn create_comic_job(
         // Load entry body for prompting
         let entry_body = get_entry_body(&db_pool, &eid).await;
         if let Err(e) = entry_body {
+            error!(error = %e, "failed to load entry body");
             status_map.insert(jid.clone(), ComicJobStatus {
                 job_id: jid.clone(),
                 entry_id: eid.clone(),
@@ -126,6 +141,7 @@ pub async fn create_comic_job(
         let entry_text = entry_body.unwrap_or_default();
 
         // Step 3: Prompting
+        debug!("comic job -> prompting");
         status_map.insert(jid.clone(), ComicJobStatus {
             job_id: jid.clone(),
             entry_id: eid.clone(),
@@ -159,6 +175,7 @@ pub async fn create_comic_job(
         }).await;
         
         if let Err(e) = stream_res {
+            error!(error = %e, "ollama prompting failed");
             status_map.insert(jid.clone(), ComicJobStatus {
                 job_id: jid.clone(),
                 entry_id: eid.clone(),
@@ -172,6 +189,7 @@ pub async fn create_comic_job(
         }
 
         // Step 4: Rendering
+        debug!("comic job -> rendering");
         status_map.insert(jid.clone(), ComicJobStatus {
             job_id: jid.clone(),
             entry_id: eid.clone(),
@@ -188,6 +206,7 @@ pub async fn create_comic_job(
         let nb_res = if settings.nano_banana_base_url.is_some() {
             // While waiting for Nano-Banana, periodically bump progress so the UI stays alive
             let mut tick_completed: u32 = 0;
+            info!("sending storyboard to nano-banana");
             let req_fut = nano_banana_generate_image(&storyboard_text, &settings);
             tokio::pin!(req_fut);
 
@@ -198,6 +217,7 @@ pub async fn create_comic_job(
                         // Cap at 98 to leave room for finalize/saving
                         if tick_completed < 98 {
                             tick_completed = tick_completed.saturating_add(2).min(98);
+                            debug!(progress = tick_completed, "nano-banana waiting...");
                             status_map.insert(jid.clone(), ComicJobStatus {
                                 job_id: jid.clone(),
                                 entry_id: eid.clone(),
@@ -214,12 +234,18 @@ pub async fn create_comic_job(
 
             // Fallback to direct Gemini if Nano-Banana failed
             match res {
-                Ok(s) => Ok(s),
+                Ok(s) => {
+                    info!("nano-banana image received");
+                    Ok(s)
+                },
                 Err(e) => {
+                    warn!(error = %e, "nano-banana failed, falling back to gemini");
+                    let prompt = build_gemini_image_prompt(&storyboard_text, &st);
                     let mut last_tick = tick_completed;
-                    generate_image_with_progress(&storyboard_text, &settings, |completed, total| {
+                    generate_image_with_progress(&prompt, &settings, |completed, total| {
                         if completed > last_tick && completed % 5 == 0 {
                             last_tick = completed;
+                            debug!(progress = completed, total = total, "gemini rendering progress");
                             status_map.insert(jid.clone(), ComicJobStatus {
                                 job_id: jid.clone(),
                                 entry_id: eid.clone(),
@@ -234,10 +260,12 @@ pub async fn create_comic_job(
                 }
             }
         } else {
+            let prompt = build_gemini_image_prompt(&storyboard_text, &st);
             let mut last_tick = 0u32;
-            generate_image_with_progress(&storyboard_text, &settings, |completed, total| {
+            generate_image_with_progress(&prompt, &settings, |completed, total| {
                 if completed > last_tick && completed % 5 == 0 {
                     last_tick = completed;
+                    debug!(progress = completed, total = total, "gemini rendering progress");
                     status_map.insert(jid.clone(), ComicJobStatus {
                         job_id: jid.clone(),
                         entry_id: eid.clone(),
@@ -258,6 +286,7 @@ pub async fn create_comic_job(
                         let ext = guess_image_extension(&bytes);
                         let img_path = images_dir.join(format!("{}-result.{}", &jid, ext));
                         let _ = tokio::fs::write(&img_path, bytes).await;
+                        info!(path = %img_path.display(), "saved generated image");
                         
                         status_map.insert(jid.clone(), ComicJobStatus {
                             job_id: jid.clone(),
@@ -282,6 +311,7 @@ pub async fn create_comic_job(
                         });
                     }
                     Err(e) => {
+                        error!(error = %e, "image decode failed");
                         status_map.insert(jid.clone(), ComicJobStatus {
                             job_id: jid.clone(),
                             entry_id: eid.clone(),
@@ -295,6 +325,7 @@ pub async fn create_comic_job(
                 }
             }
             Err(e) => {
+                error!(error = %e, "image generation failed");
                 status_map.insert(jid.clone(), ComicJobStatus {
                     job_id: jid.clone(),
                     entry_id: eid.clone(),

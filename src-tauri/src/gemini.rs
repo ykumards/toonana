@@ -3,9 +3,11 @@ use futures_util::StreamExt;
 use std::time::Duration;
 
 use crate::settings::Settings;
+use tracing::{info, warn, error, debug, instrument};
 
 
 
+#[instrument(skip(settings, on_progress), fields(model = "gemini-2.5-flash-image-preview"))]
 pub async fn generate_image_stream_progress(
     prompt: &str,
     settings: &Settings,
@@ -122,6 +124,7 @@ pub async fn generate_image_stream_progress(
         .context("gemini image request failed")?;
     
     if !resp.status().is_success() {
+        error!(http = %resp.status(), "gemini image error");
         return Err(anyhow!("gemini image error: HTTP {}", resp.status()));
     }
 
@@ -173,9 +176,11 @@ pub async fn generate_image_stream_progress(
     on_progress(99, total);
     let out = latest_b64.ok_or_else(|| anyhow!("gemini stream: no image data received"))?;
     on_progress(100, total);
+    info!("gemini streaming image generation completed");
     Ok(out)
 }
 
+#[instrument(skip(settings), fields(model = "gemini-2.5-flash-image-preview"))]
 pub async fn generate_image_once(prompt: &str, settings: &Settings) -> Result<String> {
     let api_key = settings
         .gemini_api_key
@@ -214,6 +219,7 @@ pub async fn generate_image_once(prompt: &str, settings: &Settings) -> Result<St
         .context("gemini image request failed")?;
     
     if !resp.status().is_success() {
+        error!(http = %resp.status(), "gemini image error");
         return Err(anyhow!("gemini image error: HTTP {}", resp.status()));
     }
     
@@ -290,6 +296,7 @@ pub async fn generate_image_once(prompt: &str, settings: &Settings) -> Result<St
     }
 
     if let Some(s) = find_image_data(&value) {
+        info!("gemini non-streaming image generation completed");
         return Ok(s);
     }
 

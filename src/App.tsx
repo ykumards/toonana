@@ -269,7 +269,7 @@ export default function App() {
         )}
         
         {/* Sidebar */}
-        <div className={`${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} sm:translate-x-0 transition-transform duration-200`}>
+        <div className={`${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} sm:translate-x-0 transition-transform duration-200 w-64 md:w-72 lg:w-80 flex-shrink-0`}>
           <EntriesSidebar
             entries={entries ?? []}
             selectedId={selectedId}
@@ -355,7 +355,7 @@ export default function App() {
                     title="Settings"
                   >
                     <Settings className="w-4 h-4" />
-                    <span className="hidden sm:inline">Settings</span>
+                    <span className="hidden lg:inline">Settings</span>
                   </Button>
                   
                   <Button
@@ -366,7 +366,7 @@ export default function App() {
                     title="Save (Cmd/Ctrl + S)"
                   >
                     <Save className="w-4 h-4" />
-                    <span className="hidden sm:inline">Save</span>
+                    <span className="hidden lg:inline">Save</span>
                   </Button>
                   
                   <Button

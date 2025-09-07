@@ -8,6 +8,7 @@ mod utils;
 use anyhow::Result;
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
+use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
 use sqlx::{Pool, Sqlite};
 use std::fs;
@@ -15,6 +16,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing_appender::rolling;
 
 use crate::comic::{ComicJobStatus, ComicStage, ExportPanel, JobId};
 use crate::database::{
@@ -29,6 +32,39 @@ use crate::utils::{db_path, ensure_data_dir};
 static SERVICE_NAME: &str = "toonana";
 #[allow(dead_code)]
 static VAULT_KEY_LABEL: &str = "vault-key-v1";
+
+static LOG_GUARD: OnceCell<tracing_appender::non_blocking::WorkerGuard> = OnceCell::new();
+
+fn init_tracing(data_dir: &Path) -> Result<()> {
+    let logs_dir = data_dir.join("logs");
+    let _ = fs::create_dir_all(&logs_dir);
+
+    let file_appender = rolling::daily(&logs_dir, "toonana.log");
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+    let _ = LOG_GUARD.set(guard);
+
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+
+    let stdout_layer = fmt::layer()
+        .with_target(true)
+        .with_thread_ids(false)
+        .with_thread_names(false)
+        .with_ansi(true)
+        .with_writer(std::io::stdout);
+
+    let file_layer = fmt::layer()
+        .with_target(true)
+        .with_ansi(false)
+        .with_writer(non_blocking);
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(stdout_layer)
+        .with(file_layer)
+        .init();
+    Ok(())
+}
 
 #[derive(Clone)]
 struct AppState {
@@ -210,6 +246,8 @@ static STARTUP: Lazy<Result<AppState>> = Lazy::new(|| tauri_startup());
 fn tauri_startup() -> Result<AppState> {
     let data_dir = ensure_data_dir()?;
     let db_file = db_path(&data_dir);
+    // Initialize structured logging early
+    let _ = init_tracing(&data_dir);
     
     // We need a synchronous runtime here to construct the pool
     let rt = tokio::runtime::Runtime::new()?;
@@ -226,6 +264,7 @@ fn tauri_startup() -> Result<AppState> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let state = STARTUP.as_ref().expect("startup failed").clone();
+    tracing::info!(data_dir = %state.data_dir.display(), "backend initialized");
     
     tauri::Builder::default()
         .manage(state)
