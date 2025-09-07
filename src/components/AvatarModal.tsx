@@ -192,7 +192,30 @@ export function AvatarModal({ open, onClose, onSaved }: AvatarModalProps) {
                   )}
                   <div>
                     <div className="text-sm font-medium text-white">Current avatar</div>
-                    <div className="text-xs text-slate-400">{existingPath ? "Set" : "Not set"}</div>
+                    <div className="text-xs text-slate-400">
+                      {existingPath ? (
+                        <>
+                          Set · <button
+                            onClick={async () => {
+                              try {
+                                setError(null);
+                                await invoke("delete_avatar_image");
+                                setExistingPath(null);
+                              } catch (e) {
+                                console.error("Delete avatar failed", e);
+                                setError(`Delete failed: ${String(e ?? "Unknown error")}`);
+                              }
+                            }}
+                            className="text-rose-300 hover:text-rose-400"
+                            title="Remove avatar"
+                          >
+                            Remove
+                          </button>
+                        </>
+                      ) : (
+                        "Not set"
+                      )}
+                    </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
