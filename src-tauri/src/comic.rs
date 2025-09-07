@@ -75,10 +75,23 @@ pub fn guess_image_extension(bytes: &[u8]) -> &'static str {
 }
 
 fn build_gemini_image_prompt(storyboard_text: &str, style: &str) -> String {
-    // A structured, style-aware prompt for image models (e.g., Gemini image, Flux Kontext-like)
-    // Keeps the storyboard as source-of-truth while guiding layout and aesthetics
-    format!(
-        "Task: Render a single-page comic with 4–6 panels from the storyboard.\n\nStyle: {}\nLayout Guidelines:\n- Arrange panels left-to-right, top-to-bottom in a clean grid.\n- Keep characters consistent across panels (appearance, clothing, hair).\n- Include speech bubbles and captions exactly as written in the storyboard.\n- Avoid extra text, UI, or watermarks beyond bubbles/captions.\n- Maintain clear line art, readable bubbles, cohesive backgrounds.\n- Tone: light, charming, hopeful.\n\nOutput: One coherent multi-panel comic page image.\n\nStoryboard:\n{}",
+    // A structured, style-aware prompt for image models
+    // Render exactly 3 panels in a single row, guided by the storyboard
+    format!(r#"Task: Render a single-row comic with 3-4 panels from the storyboard.
+
+Style: {}
+Layout Guidelines:
+- Layout: 3-4 panels, left-to-right in one horizontal row, equal width, small gutters.
+- Keep characters consistent across panels (appearance, clothing, hair).
+- Include speech bubbles and captions exactly as written in the storyboard.
+- Avoid extra text, UI, or watermarks beyond bubbles/captions.
+- Maintain clear line art, readable bubbles, cohesive backgrounds.
+- Tone: light, charming, hopeful.
+
+Output: One coherent 3-panel comic image (single row).
+
+Storyboard:
+{}"#,
         style,
         storyboard_text
     )
@@ -152,8 +165,39 @@ pub async fn create_comic_job(
             storyboard_text: None,
         });
         
-        let ollama_prompt = format!(
-            "You are a helpful assistant that writes short 4-6 panel comic storyboards from a journal entry.\n\nJournal Entry:\n{}\n\nGuidelines:\n- Keep tone light, hopeful, and not too dark; find a positive spin.\n- Avoid heavy or sensitive content; keep it PG and uplifting.\n- Privacy: do not reveal personal or identifying information from the journal entry; do not quote it verbatim. Replace names, places, dates, or unique details with neutral terms (e.g., 'a friend', 'a cafe', 'today').\n- Only include characters or speakers that are clearly present in the journal entry.\n- Do not invent extra characters; if no one else is mentioned, use a single speaker or captions/inner thoughts only. If another person is mentioned, you may include them using neutral terms (e.g., 'a friend').\n\nReturn ONLY the transcript lines in exactly this format (no titles, explanations, or extra text):\nPanel 1\nCaption: <short caption>\nPanel 2\nCharacter 1: <dialogue>\n...\nKeep each caption/dialogue under 12 words.",
+        let ollama_prompt = format!(r#"You are a helpful assistant that writes a short 3‑panel comic storyboard from a journal entry.
+
+Guidelines:
+- Keep tone light, hopeful, and not too dark; find a positive spin.
+- Avoid heavy or sensitive content; keep it PG and uplifting.
+- Privacy: do not reveal personal or identifying information from the journal entry; do not quote it verbatim. Replace names, places, dates, or unique details with neutral terms (e.g., 'a friend', 'a cafe', 'today').
+- Only include characters or speakers that are clearly present in the journal entry.
+- Do NOT invent specific locations, props, or events beyond what the journal clearly implies. If details are unspecified, use a neutral everyday setting.
+- Maintain continuity across panels.
+
+Output strictly in this structure for exactly 3-4 panels (no extra commentary, no blank lines between panels):
+Panel 1
+Description: <one concise sentence describing what the viewer sees>
+Caption: <optional; short; ≤ 12 words>
+Character 1: <optional; dialogue or inner thought; ≤ 12 words>
+Character 2: <optional; dialogue; ≤ 12 words>
+Panel 2
+Description: <visual description>
+Caption: <optional>
+Character 1: <optional>
+Panel 3
+Description: <visual description>
+Caption: <optional>
+Character 1: <optional>
+
+Rules:
+- If a field is not needed for a panel, omit that line entirely (do not write "none").
+- Prefer everyday, grounded scenes that could plausibly match the journal entry.
+- Use generic references (e.g., "a friend") instead of names. Do not quote the journal directly.
+
+Journal Entry:
+{}
+"#,
             entry_text
         );
 

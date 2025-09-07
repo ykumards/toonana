@@ -3,7 +3,7 @@ import { X, Sparkles, Loader2, OctagonX, PartyPopper } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "./ui/button";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 export type ComicStage =
   | { stage: "queued" }
@@ -33,6 +33,7 @@ type Props = {
 };
 
 export function ComicProgressModal({ open, status, onClose, onCancel }: Props) {
+  const [fullPreviewOpen, setFullPreviewOpen] = useState(false);
   const subtitle = useMemo(() => {
     if (!status) return "";
     const s = status.stage;
@@ -149,11 +150,20 @@ export function ComicProgressModal({ open, status, onClose, onCancel }: Props) {
                 <div className="text-sm font-medium text-slate-700">Preview</div>
                 <div className="mt-2 overflow-hidden rounded-xl border border-slate-200 bg-white min-h-[180px] flex items-center justify-center">
                   {status?.result_image_path ? (
-                    <img
-                      src={convertFileSrc(status.result_image_path)}
-                      className="block max-h-[280px] w-full object-contain"
-                      alt="Generated comic preview"
-                    />
+                    <button
+                      onClick={() => setFullPreviewOpen(true)}
+                      className="group relative block w-full"
+                      title="Click to open full preview"
+                    >
+                      <img
+                        src={convertFileSrc(status.result_image_path)}
+                        className="block max-h-[280px] w-full object-contain"
+                        alt="Generated comic preview"
+                      />
+                      <div className="pointer-events-none absolute inset-0 hidden items-center justify-center bg-black/20 group-hover:flex">
+                        <span className="rounded-md bg-white/90 px-2 py-1 text-xs text-slate-700 shadow">Click to preview</span>
+                      </div>
+                    </button>
                   ) : (
                     <div className="flex items-center gap-3 text-slate-500">
                       <div className="h-6 w-6 rounded-full border-2 border-slate-200 border-t-transparent animate-spin" />
@@ -176,6 +186,25 @@ export function ComicProgressModal({ open, status, onClose, onCancel }: Props) {
               </div>
             </div>
           </motion.div>
+          {fullPreviewOpen && status?.result_image_path ? (
+            <div className="fixed inset-0 z-[70] flex items-center justify-center">
+              <div className="absolute inset-0 bg-black/70" onClick={() => setFullPreviewOpen(false)} />
+              <div className="relative max-w-[92vw] max-h-[92vh] p-2">
+                <button
+                  className="absolute -top-3 -right-3 inline-flex h-8 w-8 items-center justify-center rounded-full bg-white text-slate-600 shadow hover:bg-slate-100"
+                  onClick={() => setFullPreviewOpen(false)}
+                  aria-label="Close preview"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+                <img
+                  src={convertFileSrc(status.result_image_path)}
+                  alt="Full preview"
+                  className="block max-h-[92vh] max-w-[92vw] rounded-md object-contain shadow-2xl"
+                />
+              </div>
+            </div>
+          ) : null}
         </motion.div>
       ) : null}
     </AnimatePresence>

@@ -1,9 +1,12 @@
 use anyhow::{anyhow, Context, Result};
 use futures_util::StreamExt;
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+use std::fs;
+use std::path::Path;
 use std::time::Duration;
 
 use crate::settings::Settings;
-use tracing::{info, warn, error, debug, instrument};
+use tracing::{info, error, instrument};
 
 
 
@@ -99,11 +102,17 @@ pub async fn generate_image_stream_progress(
         model_id
     );
     
+    // Build parts: prompt text + optional avatar image and description
+    let mut parts: Vec<serde_json::Value> = vec![serde_json::json!({ "text": build_prompt_with_avatar_text(prompt, settings) })];
+    if let Some(img_part) = try_build_avatar_image_part(settings) {
+        parts.push(img_part);
+    }
+
     let body = serde_json::json!({
         "contents": [
             {
                 "role": "user",
-                "parts": [ { "text": prompt } ]
+                "parts": parts
             }
         ],
         "generationConfig": {
@@ -194,11 +203,17 @@ pub async fn generate_image_once(prompt: &str, settings: &Settings) -> Result<St
         model_id
     );
     
+    // Build parts: prompt text + optional avatar image and description
+    let mut parts: Vec<serde_json::Value> = vec![serde_json::json!({ "text": build_prompt_with_avatar_text(prompt, settings) })];
+    if let Some(img_part) = try_build_avatar_image_part(settings) {
+        parts.push(img_part);
+    }
+
     let body = serde_json::json!({
         "contents": [
             {
                 "role": "user",
-                "parts": [ { "text": prompt } ]
+                "parts": parts
             }
         ],
         "generationConfig": {
@@ -316,6 +331,31 @@ pub async fn generate_image_with_progress(
     }
 }
 
+fn build_prompt_with_avatar_text(prompt: &str, settings: &Settings) -> String {
+    let mut out = String::new();
+    out.push_str(prompt);
+    if let Some(desc) = settings.avatar_description.as_ref().filter(|s| !s.trim().is_empty()) {
+        out.push_str("\n\nCharacter consistency: The protagonist must match this description consistently across images.\n");
+        out.push_str(desc);
+    }
+    out
+}
+
+fn try_build_avatar_image_part(settings: &Settings) -> Option<serde_json::Value> {
+    let path = settings.avatar_image_path.as_ref()?;
+    let p = Path::new(path);
+    let bytes = fs::read(p).ok()?;
+    let b64 = B64.encode(bytes);
+    let mime = match p.extension().and_then(|e| e.to_str()).map(|s| s.to_ascii_lowercase()) {
+        Some(ext) if ext == "jpg" || ext == "jpeg" => "image/jpeg",
+        Some(ext) if ext == "webp" => "image/webp",
+        _ => "image/png",
+    };
+    Some(serde_json::json!({
+        "inlineData": { "mimeType": mime, "data": b64 }
+    }))
+}
+
 // Nano-Banana integration
 pub async fn nano_banana_generate_image(
     storyboard_text: &str,
@@ -333,8 +373,15 @@ pub async fn nano_banana_generate_image(
         .build()
         .map_err(|e| format!("http client error: {e}"))?;
     
+    // Inject avatar guidance into storyboard text so downstream renderer can try to respect it
+    let mut storyboard_plus = storyboard_text.to_string();
+    if let Some(desc) = settings.avatar_description.as_ref().filter(|s| !s.trim().is_empty()) {
+        storyboard_plus.push_str("\n\nCharacter consistency: The protagonist must match this description consistently across panels.\n");
+        storyboard_plus.push_str(desc);
+    }
+
     let mut req = client.post(url).json(&serde_json::json!({
-        "storyboard": storyboard_text,
+        "storyboard": storyboard_plus,
     }));
     
     if let Some(key) = &settings.nano_banana_api_key {

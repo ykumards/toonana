@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 
 type Settings = {
   avatar_description?: string | null;
@@ -20,6 +20,7 @@ export function AvatarModal({ open, onClose, onSaved }: AvatarModalProps) {
   const [previews, setPreviews] = useState<string[]>([]);
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
   const [existingPath, setExistingPath] = useState<string | null>(null);
+  const existingSrc = existingPath ? convertFileSrc(existingPath) : null;
 
   useEffect(() => {
     if (!open) return;
@@ -103,6 +104,12 @@ export function AvatarModal({ open, onClose, onSaved }: AvatarModalProps) {
               <div className="text-xs text-text-tertiary">
                 Tip: Keep it concise but evocative (2‑4 sentences). We'll integrate this into prompts later.
               </div>
+              {existingSrc && (
+                <div className="flex items-center gap-3">
+                  <div className="text-sm font-medium">Current avatar</div>
+                  <img src={existingSrc} alt="Current avatar" className="w-16 h-16 rounded-md object-cover border border-journal-300" />
+                </div>
+              )}
               <div className="flex items-center gap-2">
                 <button onClick={handleGenerate} disabled={generating || !avatar.trim()} className="px-3 py-2 rounded-md bg-accent-500 text-white hover:bg-accent-600 disabled:opacity-50">
                   {generating ? "Generating…" : "Generate previews"}
