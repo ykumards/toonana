@@ -12,6 +12,8 @@ pub struct Settings {
     pub ollama_top_p: Option<f32>,
     pub nano_banana_base_url: Option<String>,
     pub nano_banana_api_key: Option<String>,
+    pub avatar_description: Option<String>,
+    pub avatar_image_path: Option<String>,
 }
 
 pub fn settings_path(data_dir: &Path) -> PathBuf {

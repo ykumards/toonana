@@ -26,6 +26,7 @@ use crate::database::{
 };
 use crate::settings::{load_settings_from_dir, save_settings_to_dir, Settings};
 use crate::utils::{db_path, ensure_data_dir};
+use crate::comic::{decode_base64_png, guess_image_extension};
 
 // kept for potential future re-enable of encryption
 #[allow(dead_code)]
@@ -253,13 +254,48 @@ async fn export_pdf(
 }
 
 #[tauri::command]
+async fn generate_avatar_image(prompt: String) -> Result<String, String> {
+    let state = STARTUP.as_ref().map_err(|e| e.to_string())?.clone();
+    let settings = load_settings_from_dir(&state.data_dir);
+    let full_prompt = format!(
+        "Create a portrait avatar in a consistent illustrative style. Waist‑up framing, clean background, neutral lighting. Avoid text and watermarks. Character description: {}",
+        prompt
+    );
+    if settings.nano_banana_base_url.is_some() {
+        match gemini::nano_banana_generate_image(&full_prompt, &settings).await {
+            Ok(s) => return Ok(s),
+            Err(_) => {}
+        }
+    }
+    gemini::generate_image_once(&full_prompt, &settings)
+        .await
+        .map_err(|e| format!("avatar generation failed: {}", e))
+}
+
+#[tauri::command]
+async fn save_avatar_image(base64_png: String) -> Result<String, String> {
+    let state = STARTUP.as_ref().map_err(|e| e.to_string())?.clone();
+    let bytes = decode_base64_png(&base64_png).map_err(|e| e.to_string())?;
+    let ext = guess_image_extension(&bytes);
+    let avatars_dir = state.data_dir.join("avatars");
+    let _ = std::fs::create_dir_all(&avatars_dir);
+    let path = avatars_dir.join(format!("avatar.{}", ext));
+    std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+    // Update settings with saved path
+    let mut s = load_settings_from_dir(&state.data_dir);
+    s.avatar_image_path = Some(path.display().to_string());
+    save_settings_to_dir(&state.data_dir, &s).map_err(|e| e.to_string())?;
+    Ok(path.display().to_string())
+}
+
+#[tauri::command]
 async fn list_comics_by_day(
     state: tauri::State<'_, AppState>,
     limit_days: Option<i64>,
 ) -> Result<Vec<ComicsByDay>, String> {
     use std::collections::BTreeMap;
     use std::fs;
-    use std::path::Path;
+    // removed unused local import of Path
 
     let limit_days = limit_days.unwrap_or(120);
 
@@ -375,6 +411,8 @@ pub fn run() {
             ollama_list_models,
             ollama_generate,
             list_comics_by_day
+            , generate_avatar_image
+            , save_avatar_image
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
