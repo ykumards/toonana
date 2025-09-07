@@ -18,12 +18,12 @@ export function AvatarModal({ open, onClose, onSaved }: AvatarModalProps) {
   const [avatar, setAvatar] = useState<string>("");
   const [generating, setGenerating] = useState(false);
   const [genStep, setGenStep] = useState<number>(0);
-  const TOTAL_VARIATIONS = 1;
   const [previews, setPreviews] = useState<string[]>([]);
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
   const [existingPath, setExistingPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const existingSrc = existingPath ? convertFileSrc(existingPath) : null;
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 
   const toDataUrl = (b64: string) => (b64.startsWith("data:") ? b64 : `data:image/png;base64,${b64}`);
   const preloadImage = (src: string) => new Promise<void>((resolve, reject) => {
@@ -32,6 +32,7 @@ export function AvatarModal({ open, onClose, onSaved }: AvatarModalProps) {
     img.onerror = () => reject(new Error("image load failed"));
     img.src = src;
   });
+  // const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
 
   useEffect(() => {
     if (!open) return;
@@ -56,16 +57,22 @@ export function AvatarModal({ open, onClose, onSaved }: AvatarModalProps) {
   const handleSave = async () => {
     try {
       setSaving(true);
+      setError(null);
       const s = await invoke<Settings>("get_settings");
       const updated = { ...(s || {}), avatar_description: avatar } as Settings;
       await invoke<Settings>("update_settings", { settings: updated });
       if (selectedIdx != null) {
         const b64 = previews[selectedIdx];
-        const savedPath = await invoke<string>("save_avatar_image", { base64_png: b64 });
+        const raw = b64.startsWith("data:") ? b64.slice(b64.indexOf(",") + 1) : b64;
+        const savedPath = await invoke<string>("save_avatar_image", { base64Png: raw });
         setExistingPath(savedPath);
       }
       onSaved?.(avatar);
       onClose();
+    } catch (e) {
+      console.error("Save avatar failed", e);
+      const msg = String(e ?? "Unknown error");
+      setError(`Save failed: ${msg}`);
     } finally {
       setSaving(false);
     }
@@ -76,25 +83,60 @@ export function AvatarModal({ open, onClose, onSaved }: AvatarModalProps) {
       setGenerating(true);
       setGenStep(0);
       setError(null);
-      // Generate a single preview per attempt
-      const items: string[] = [];
-      const prompt = avatar;
+      setPreviews([]);
+      setSelectedIdx(null);
+      const description = avatar;
       setGenStep(1);
-      try {
-        const img = await invoke<string>("generate_avatar_image", { prompt });
-        items.push(img);
-      } catch (e) {
-        console.error("Avatar generation failed", e);
-      }
-      if (items.length === 0) {
-        setError("Generation failed: no previews produced. Check Settings for your Gemini API key or Nano‑Banana config.");
-        return;
-      }
-      const dataUrls = items.map(toDataUrl);
-      // Ensure previews are actually decoded before we hide the loader
-      await Promise.all(dataUrls.map(preloadImage));
-      setPreviews(dataUrls);
-      setSelectedIdx(0);
+      // Kick off background job and start polling like Cartoonify
+      const id = await invoke<string>("create_avatar_job", { description });
+      // Poll loop
+      const poll = async () => {
+        try {
+          const status = await invoke<any>("get_avatar_job_status", { jobId: id });
+          const st = status?.stage?.stage as string | undefined;
+          if (st === "rendering") {
+            const completed = status.stage.completed as number | undefined;
+            const total = status.stage.total as number | undefined;
+            if (typeof completed === "number" && typeof total === "number" && total > 0) {
+              const pct = Math.min(100, Math.max(0, Math.round((completed / total) * 100)));
+              setGenStep(pct);
+            }
+            setTimeout(poll, 450);
+            return;
+          }
+          if (st === "done") {
+            const img = status?.image_base64 as string | undefined;
+            if (!img) {
+              setError("Generation failed: no image returned");
+              setGenerating(false);
+              setGenStep(0);
+              return;
+            }
+            const dataUrl = toDataUrl(img);
+            await preloadImage(dataUrl);
+            setPreviews([dataUrl]);
+            setSelectedIdx(0);
+            setGenerating(false);
+            setGenStep(0);
+            return;
+          }
+          if (st === "failed") {
+            const msg = status?.stage?.error as string | undefined;
+            setError(`Generation failed: ${msg || "Unknown error"}`);
+            setGenerating(false);
+            setGenStep(0);
+            return;
+          }
+          // queued or unknown -> keep polling
+          setTimeout(poll, 500);
+        } catch (e) {
+          console.error("Avatar polling error", e);
+          setError(`Generation failed: ${String(e)}`);
+          setGenerating(false);
+          setGenStep(0);
+        }
+      };
+      poll();
     } catch (e) {
       console.error("Avatar generation failed", e);
       const msg = String(e ?? "Unknown error");
@@ -103,8 +145,7 @@ export function AvatarModal({ open, onClose, onSaved }: AvatarModalProps) {
         : "";
       setError(`Generation failed: ${msg}${hint}`);
     } finally {
-      setGenerating(false);
-      setGenStep(0);
+      // keep generating true until polling resolves
     }
   };
 
@@ -136,19 +177,29 @@ export function AvatarModal({ open, onClose, onSaved }: AvatarModalProps) {
               <div className="text-xs text-text-tertiary">
                 Tip: Keep it concise but evocative (2‑4 sentences). We'll integrate this into prompts later.
               </div>
-              {existingSrc && (
+              <div className="flex items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
-                  <div className="text-sm font-medium">Current avatar</div>
-                  <img src={existingSrc} alt="Current avatar" className="w-16 h-16 rounded-md object-cover border border-journal-300" />
+                  {existingSrc ? (
+                    <button
+                      onClick={() => setLightboxSrc(existingSrc)}
+                      className="relative border rounded-md overflow-hidden border-journal-300"
+                      title="Click to expand current avatar"
+                    >
+                      <img src={existingSrc} alt="Current avatar" className="w-16 h-16 object-cover" />
+                    </button>
+                  ) : (
+                    <div className="w-16 h-16 rounded-md border border-dashed border-journal-300 grid place-items-center text-xs text-text-tertiary">None</div>
+                  )}
+                  <div>
+                    <div className="text-sm font-medium">Current avatar</div>
+                    <div className="text-xs text-text-tertiary">{existingPath ? "Set" : "Not set"}</div>
+                  </div>
                 </div>
-              )}
-              <div className="flex items-center gap-2">
-                <button onClick={handleGenerate} disabled={generating || !avatar.trim()} className="px-3 py-2 rounded-md bg-accent-500 text-white hover:bg-accent-600 disabled:opacity-50">
-                  {generating ? "Generating…" : "Generate preview"}
-                </button>
-                {existingPath ? (
-                  <span className="text-xs text-text-tertiary">Current avatar set</span>
-                ) : null}
+                <div className="flex items-center gap-2">
+                  <button onClick={handleGenerate} disabled={generating || !avatar.trim()} className="px-3 py-2 rounded-md bg-accent-500 text-white hover:bg-accent-600 disabled:opacity-50">
+                    {generating ? "Generating…" : "Generate preview"}
+                  </button>
+                </div>
               </div>
               {error && (
                 <div className="text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded-md px-3 py-2">
@@ -160,11 +211,11 @@ export function AvatarModal({ open, onClose, onSaved }: AvatarModalProps) {
                   {previews.map((b64, idx) => (
                     <button
                       key={idx}
-                      onClick={() => setSelectedIdx(idx)}
+                      onClick={() => { setSelectedIdx(idx); setLightboxSrc(b64.startsWith("data:") ? b64 : `data:image/png;base64,${b64}`); }}
                       className={`relative border rounded-md overflow-hidden ${selectedIdx === idx ? "ring-2 ring-accent-500" : "border-journal-300"}`}
-                      title="Click to select"
+                      title="Click to expand"
                     >
-                      <img src={b64.startsWith("data:") ? b64 : `data:image/png;base64,${b64}`} alt={`Preview ${idx+1}`} className="w-full h-40 object-cover" />
+                      <img src={b64.startsWith("data:") ? b64 : `data:image/png;base64,${b64}`} alt={`Preview ${idx+1}`} className="w-24 h-24 object-cover" />
                     </button>
                   ))}
                   <div className="text-xs text-text-tertiary">Preview not saved yet — click Save to keep it.</div>
@@ -185,14 +236,22 @@ export function AvatarModal({ open, onClose, onSaved }: AvatarModalProps) {
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
               </svg>
-              <div className="text-sm text-text-tertiary">Generating avatar {genStep}/{TOTAL_VARIATIONS}…</div>
+              <div className="text-sm text-text-tertiary">Generating avatar {genStep}%…</div>
               <div className="text-xs text-text-tertiary">This can take up to ~20 seconds</div>
             </div>
+          </div>
+        )}
+
+        {lightboxSrc && (
+          <div className="absolute inset-0 bg-black/70 flex items-center justify-center z-10" onClick={() => setLightboxSrc(null)}>
+            <img
+              src={lightboxSrc}
+              alt="Preview"
+              className="max-w-[90vw] max-h-[80vh] rounded-md border border-white/20 shadow-2xl"
+            />
           </div>
         )}
       </div>
     </div>
   );
 }
-
-

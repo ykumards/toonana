@@ -73,6 +73,7 @@ struct AppState {
     data_dir: PathBuf,
     jobs: Arc<DashMap<String, JoinHandle<()>>>,
     comic_status: Arc<DashMap<String, ComicJobStatus>>,
+    avatar_status: Arc<DashMap<String, AvatarJobStatus>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -94,6 +95,23 @@ struct ComicItem {
 struct ComicsByDay {
     date: String,
     comics: Vec<ComicItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "stage", rename_all = "snake_case")]
+enum AvatarStage {
+    Queued,
+    Rendering { completed: u32, total: u32 },
+    Done,
+    Failed { error: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AvatarJobStatus {
+    job_id: String,
+    updated_at: String,
+    stage: AvatarStage,
+    image_base64: Option<String>,
 }
 
 // ===== Tauri Commands =====
@@ -256,18 +274,35 @@ async fn export_pdf(
 #[tauri::command]
 async fn generate_avatar_image(prompt: String) -> Result<String, String> {
     let state = STARTUP.as_ref().map_err(|e| e.to_string())?.clone();
-    let settings = load_settings_from_dir(&state.data_dir);
+    let mut settings = load_settings_from_dir(&state.data_dir);
+    // Do not include previous avatar image as an input when generating a new avatar
+    settings.avatar_image_path = None;
     let full_prompt = gemini::build_avatar_image_prompt(&prompt);
     tracing::info!(
         nano_banana = %settings.nano_banana_base_url.as_deref().unwrap_or("(none)"),
         desc_len = full_prompt.len(),
         "avatar: start generation"
     );
+    // Helper to ensure we always return a correctly-typed data URI
+    fn to_data_uri(s: String) -> String {
+        if s.starts_with("data:") {
+            return s;
+        }
+        let (mime, _ext) = match decode_base64_png(&s) {
+            Ok(bytes) => match guess_image_extension(&bytes) {
+                "jpg" => ("image/jpeg", "jpg"),
+                "webp" => ("image/webp", "webp"),
+                _ => ("image/png", "png"),
+            },
+            Err(_) => ("image/png", "png"),
+        };
+        format!("data:{};base64,{}", mime, s)
+    }
     if settings.nano_banana_base_url.is_some() {
         match gemini::nano_banana_generate_image(&full_prompt, &settings).await {
             Ok(s) => {
                 tracing::info!("avatar: nano-banana success");
-                return Ok(s);
+                return Ok(to_data_uri(s));
             }
             Err(e) => {
                 tracing::warn!(error = %e, "avatar: nano-banana failed, falling back to gemini (stream)");
@@ -277,7 +312,7 @@ async fn generate_avatar_image(prompt: String) -> Result<String, String> {
     match gemini::generate_image_with_progress(&full_prompt, &settings, |_c, _t| {}).await {
         Ok(s) => {
             tracing::info!("avatar: gemini (stream) success");
-            Ok(s)
+            Ok(to_data_uri(s))
         }
         Err(e) => {
             tracing::error!(error = %e, "avatar: gemini (stream) failed");
@@ -287,13 +322,156 @@ async fn generate_avatar_image(prompt: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+async fn create_avatar_job(
+    state: tauri::State<'_, AppState>,
+    description: String,
+) -> Result<JobId, String> {
+    let job_id = Uuid::new_v4().to_string();
+    state.avatar_status.insert(job_id.clone(), AvatarJobStatus {
+        job_id: job_id.clone(),
+        updated_at: now_iso(),
+        stage: AvatarStage::Queued,
+        image_base64: None,
+    });
+
+    let data_dir = state.data_dir.clone();
+    let status_map = state.avatar_status.clone();
+
+    let job_id_for_task = job_id.clone();
+    let handle = tokio::spawn(async move {
+        let settings = load_settings_from_dir(&data_dir);
+        let full_prompt = gemini::build_avatar_image_prompt(&description);
+        tracing::info!(job_id = %job_id_for_task, desc_len = description.len(), "avatar job: started");
+
+        // helper to update progress
+        let mut last_tick: u32 = 0;
+        let update_progress = |completed: u32, total: u32| {
+            status_map.insert(job_id_for_task.clone(), AvatarJobStatus {
+                job_id: job_id_for_task.clone(),
+                updated_at: now_iso(),
+                stage: AvatarStage::Rendering { completed, total },
+                image_base64: None,
+            });
+        };
+
+        // Try Nano-Banana first when configured, with periodic progress ticks
+        let result_b64: Result<String, String> = if settings.nano_banana_base_url.is_some() {
+            tracing::info!(job_id = %job_id_for_task, "avatar job: sending to nano-banana");
+            let fut = gemini::nano_banana_generate_image(&full_prompt, &settings);
+            tokio::pin!(fut);
+            let res = loop {
+                tokio::select! {
+                    r = &mut fut => { break r; }
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(800)) => {
+                        if last_tick < 98 {
+                            last_tick = last_tick.saturating_add(2).min(98);
+                            update_progress(last_tick, 100);
+                        }
+                    }
+                }
+            };
+            match res {
+                Ok(s) => Ok(s),
+                Err(e) => {
+                    tracing::warn!(job_id = %job_id_for_task, error = %e, "avatar job: nano-banana failed, fallback to gemini");
+                    gemini::generate_image_with_progress(&full_prompt, &settings, |c, t| {
+                        if c > last_tick && c % 5 == 0 { last_tick = c; }
+                        update_progress(c, t);
+                    }).await
+                }
+            }
+        } else {
+            gemini::generate_image_with_progress(&full_prompt, &settings, |c, t| {
+                if c > last_tick && c % 5 == 0 { last_tick = c; }
+                update_progress(c, t);
+            }).await
+        };
+
+        match result_b64 {
+            Ok(b64) => {
+                tracing::info!(job_id = %job_id_for_task, len = b64.len(), "avatar job: image received");
+                // ensure data URI with correct mime
+                let data_uri = {
+                    if b64.starts_with("data:") { b64.clone() } else {
+                        match decode_base64_png(&b64) {
+                            Ok(bytes) => {
+                                let mime = match guess_image_extension(&bytes) {
+                                    "jpg" => "image/jpeg",
+                                    "webp" => "image/webp",
+                                    _ => "image/png",
+                                };
+                                format!("data:{};base64,{}", mime, b64)
+                            }
+                            Err(_) => format!("data:image/png;base64,{}", b64),
+                        }
+                    }
+                };
+                status_map.insert(job_id_for_task.clone(), AvatarJobStatus {
+                    job_id: job_id_for_task.clone(),
+                    updated_at: now_iso(),
+                    stage: AvatarStage::Done,
+                    image_base64: Some(data_uri),
+                });
+            }
+            Err(e) => {
+                tracing::error!(job_id = %job_id_for_task, error = %e, "avatar job: failed");
+                status_map.insert(job_id_for_task.clone(), AvatarJobStatus {
+                    job_id: job_id_for_task.clone(),
+                    updated_at: now_iso(),
+                    stage: AvatarStage::Failed { error: e },
+                    image_base64: None,
+                });
+            }
+        }
+    });
+
+    state.jobs.insert(job_id.clone(), handle);
+    Ok(job_id)
+}
+
+#[tauri::command]
+async fn get_avatar_job_status(
+    state: tauri::State<'_, AppState>,
+    job_id: String,
+) -> Result<AvatarJobStatus, String> {
+    state
+        .avatar_status
+        .get(&job_id)
+        .map(|v| v.clone())
+        .ok_or_else(|| "job not found".to_string())
+}
+
+#[tauri::command]
+async fn cancel_avatar_job(state: tauri::State<'_, AppState>, job_id: String) -> Result<(), String> {
+    if let Some((_, handle)) = state.jobs.remove(&job_id) {
+        handle.abort();
+    }
+    Ok(())
+}
+
+#[tauri::command]
 async fn save_avatar_image(base64_png: String) -> Result<String, String> {
     let state = STARTUP.as_ref().map_err(|e| e.to_string())?.clone();
     let bytes = decode_base64_png(&base64_png).map_err(|e| e.to_string())?;
     let ext = guess_image_extension(&bytes);
     let avatars_dir = state.data_dir.join("avatars");
     let _ = std::fs::create_dir_all(&avatars_dir);
-    let path = avatars_dir.join(format!("avatar.{}", ext));
+    // Clean older avatar files to avoid cache collisions
+    if let Ok(rd) = std::fs::read_dir(&avatars_dir) {
+        for ent in rd.flatten() {
+            if let Some(name) = ent.file_name().to_str() {
+                if name.starts_with("avatar") {
+                    let _ = std::fs::remove_file(ent.path());
+                }
+            }
+        }
+    }
+    // Use a unique filename to bust caches
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let path = avatars_dir.join(format!("avatar-{}.{}", ts, ext));
     std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
     tracing::info!(path = %path.display(), ext = %ext, "avatar: saved image to disk");
     // Update settings with saved path
@@ -409,6 +587,7 @@ fn tauri_startup() -> Result<AppState> {
         data_dir,
         jobs: Arc::new(DashMap::new()),
         comic_status: Arc::new(DashMap::new()),
+        avatar_status: Arc::new(DashMap::new()),
     })
 }
 
@@ -442,6 +621,9 @@ pub fn run() {
             list_comics_by_day
             , generate_avatar_image
             , save_avatar_image
+            , create_avatar_job
+            , get_avatar_job_status
+            , cancel_avatar_job
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
