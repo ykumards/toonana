@@ -1,7 +1,10 @@
 import { useState, useMemo } from "react";
 import { format, formatDistance } from "date-fns";
-import { Search, Plus, BookOpen, Calendar } from "lucide-react";
-import clsx from "clsx";
+import { Search, Plus, BookOpen, Calendar, FileText, Clock } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { ScrollArea } from "./ui/scroll-area";
+import { Button } from "./ui/button";
+import { motion, AnimatePresence } from "framer-motion";
 
 type EntryListItem = {
   id: string;
@@ -107,127 +110,168 @@ export function EntriesSidebar({
   };
 
   return (
-    <div className="w-80 h-full bg-surface-primary border-r border-journal-200 flex flex-col overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between px-5 py-4 border-b border-journal-100 bg-surface-secondary">
-        <div className="flex items-center gap-2">
-          <BookOpen size={20} className="text-text-tertiary" />
-          <h2 className="text-lg font-semibold text-text-primary m-0">Journal</h2>
+    <motion.div 
+      initial={{ x: -20, opacity: 0 }}
+      animate={{ x: 0, opacity: 1 }}
+      transition={{ duration: 0.3 }}
+      className="w-80 bg-gradient-to-b from-slate-50 to-slate-100 border-r border-slate-200 flex flex-col h-full"
+    >
+      {/* Modern Header */}
+      <div className="p-4 border-b border-slate-200 bg-white/80 backdrop-blur-sm">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <div className="p-2 bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg text-white shadow-lg">
+              <BookOpen size={20} />
+            </div>
+            <div>
+              <h1 className="text-lg font-bold text-slate-900">Journal</h1>
+              <p className="text-xs text-slate-500">{entries?.length || 0} entries</p>
+            </div>
+          </div>
+          <Button
+            onClick={onNewEntry}
+            size="icon"
+            variant="primary"
+            className="rounded-full shadow-lg"
+            title="New Entry (Cmd/Ctrl + N)"
+          >
+            <Plus size={18} />
+          </Button>
         </div>
-        
-        <button 
-          onClick={onNewEntry}
-          className="flex items-center justify-center w-9 h-9 bg-accent-500 text-white rounded-md hover:bg-accent-600 hover:-translate-y-0.5 hover:shadow-journal-lg transition-all duration-150 focus-ring"
-          aria-label="New entry"
-        >
-          <Plus size={16} />
-        </button>
-      </div>
 
-      {/* Search */}
-      <div className="px-5 py-4 border-b border-journal-100">
-        <div className="relative flex items-center">
-          <Search size={16} className="absolute left-3 text-text-muted z-10" />
+        {/* Modern Search Bar */}
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
           <input
             ref={searchInputRef}
             type="text"
-            placeholder="Search entries... (Cmd+K)"
+            placeholder="Search entries... (⌘K)"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-3 py-2.5 border border-journal-300 rounded-md text-sm bg-surface-primary text-text-secondary transition-all duration-150 focus-ring placeholder:text-text-muted"
+            className="w-full pl-10 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
           />
         </div>
       </div>
 
-      {/* Entries List */}
-      <div className="flex-1 overflow-y-auto">
-        {isLoading ? (
-          <div className="flex flex-col items-center justify-center h-48 gap-3 text-text-tertiary">
-            <div className="w-6 h-6 border-2 border-journal-300 border-t-accent-500 rounded-full animate-spin"></div>
-            <p>Loading entries...</p>
-          </div>
-        ) : filteredEntries.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-72 px-5 text-center text-text-tertiary gap-4">
-            {searchQuery ? (
-              <>
-                <Search size={48} className="text-journal-300" />
-                <p className="text-base font-medium">No entries found for "{searchQuery}"</p>
-                <button 
-                  onClick={() => setSearchQuery("")} 
-                  className="px-4 py-2 border border-journal-300 bg-surface-primary text-text-secondary rounded-md text-sm font-medium hover:bg-surface-secondary hover:border-journal-400 transition-all duration-150 focus-ring"
-                >
-                  Clear search
-                </button>
-              </>
-            ) : (
-              <>
-                <BookOpen size={48} className="text-journal-300" />
-                <div>
-                  <p className="text-base font-medium">No entries yet</p>
-                  <p className="text-sm text-text-muted mt-1">Start writing your first journal entry</p>
-                </div>
-                <button 
-                  onClick={onNewEntry} 
-                  className="flex items-center gap-2 px-4 py-2 bg-accent-500 text-white border border-accent-500 rounded-md text-sm font-medium hover:bg-accent-600 hover:border-accent-600 transition-all duration-150 focus-ring"
-                >
-                  <Plus size={16} />
-                  Start Writing
-                </button>
-              </>
-            )}
-          </div>
-        ) : (
-          Object.entries(groupedEntries).map(([groupName, groupEntries]) => (
-            <div key={groupName} className="mb-6">
-              <div className="sticky top-0 z-10 flex items-center gap-2 px-5 py-3 text-xs font-semibold text-text-tertiary uppercase tracking-wide border-b border-journal-50 bg-surface-secondary">
-                <Calendar size={14} />
-                <span className="flex-1">{groupName}</span>
-                <span className="bg-journal-200 text-text-tertiary px-1.5 py-0.5 rounded-full text-xs font-medium min-w-[20px] text-center">
-                  {groupEntries.length}
-                </span>
+      {/* Entries List with ScrollArea */}
+      <ScrollArea className="flex-1">
+        <div className="p-4">
+          {isLoading ? (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="flex flex-col items-center justify-center py-12 text-slate-400"
+            >
+              <div className="p-3 bg-slate-100 rounded-full mb-3">
+                <Clock className="animate-spin" size={24} />
               </div>
-              
-              <div className="bg-surface-primary">
-                {groupEntries.map(entry => (
-                  <button
-                    key={entry.id}
-                    onClick={() => onEntrySelect(entry.id)}
-                    className={clsx(
-                      "w-full px-5 py-4 border-b border-journal-50 text-left transition-all duration-150 relative",
-                      selectedId === entry.id
-                        ? "bg-accent-50 border-l-3 border-l-accent-500"
-                        : "hover:bg-surface-secondary"
-                    )}
+              <p className="text-sm font-medium">Loading entries...</p>
+            </motion.div>
+          ) : filteredEntries.length === 0 ? (
+            <motion.div 
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="flex flex-col items-center justify-center py-12 text-slate-400"
+            >
+              {searchQuery ? (
+                <>
+                  <div className="p-4 bg-gradient-to-br from-slate-100 to-slate-200 rounded-full mb-4">
+                    <Search size={32} />
+                  </div>
+                  <p className="text-sm font-medium text-slate-600 mb-1">No entries found for "{searchQuery}"</p>
+                  <Button
+                    onClick={() => setSearchQuery("")}
+                    variant="outline"
+                    size="sm"
                   >
-                    {selectedId === entry.id && (
-                      <div className="absolute top-0 right-0 bottom-0 w-0.5 bg-accent-500"></div>
-                    )}
-                    
-                    <div className="flex flex-col gap-2">
-                      <div className="flex items-start justify-between gap-2">
-                        <h3 className="text-sm font-medium text-text-primary line-clamp-1 flex-1 overflow-hidden text-ellipsis whitespace-nowrap m-0">
-                          {entry.title || "Untitled"}
-                        </h3>
-                        {getMoodEmoji(entry.mood) && (
-                          <span className="text-base flex-shrink-0">
-                            {getMoodEmoji(entry.mood)}
-                          </span>
-                        )}
-                      </div>
-                      
-                      <div className="flex items-center gap-3">
-                        <span className="text-xs text-text-tertiary font-normal">
-                          {formatEntryDate(entry.created_at)}
-                        </span>
-                      </div>
+                    Clear search
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <div className="p-4 bg-gradient-to-br from-slate-100 to-slate-200 rounded-full mb-4">
+                    <FileText size={32} />
+                  </div>
+                  <p className="text-sm font-medium text-slate-600 mb-1">No entries yet</p>
+                  <p className="text-xs text-slate-400 mb-4">Start writing your first journal entry</p>
+                  <Button
+                    onClick={onNewEntry}
+                    variant="primary"
+                    size="sm"
+                  >
+                    <Plus size={16} />
+                    Start Writing
+                  </Button>
+                </>
+              )}
+            </motion.div>
+          ) : (
+            <div className="space-y-6">
+              <AnimatePresence>
+                {Object.entries(groupedEntries).map(([groupName, groupEntries], index) => (
+                  <motion.div
+                    key={groupName}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: index * 0.05 }}
+                    className="space-y-2"
+                  >
+                    {/* Date Group Header */}
+                    <div className="flex items-center gap-2 px-2 py-1">
+                      <Calendar className="text-slate-400" size={14} />
+                      <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">{groupName}</span>
+                      <span className="ml-auto text-xs px-2 py-0.5 bg-slate-200 text-slate-600 rounded-full">
+                        {groupEntries.length}
+                      </span>
                     </div>
-                  </button>
+                    
+                    {/* Entries */}
+                    {groupEntries.map((entry) => (
+                      <motion.div
+                        key={entry.id}
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                        onClick={() => onEntrySelect(entry.id)}
+                        className={cn(
+                          "relative p-3 rounded-lg cursor-pointer transition-all",
+                          "hover:shadow-md hover:bg-white",
+                          entry.id === selectedId
+                            ? "bg-gradient-to-r from-blue-50 to-blue-100 border border-blue-200 shadow-md"
+                            : "bg-white border border-slate-200"
+                        )}
+                      >
+                        {entry.id === selectedId && (
+                          <motion.div
+                            layoutId="selectedIndicator"
+                            className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-blue-500 rounded-r-full"
+                          />
+                        )}
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1 min-w-0">
+                            <h3 className={cn(
+                              "font-medium truncate",
+                              entry.id === selectedId ? "text-blue-900" : "text-slate-900"
+                            )}>
+                              {entry.title || "Untitled"}
+                            </h3>
+                            <p className="text-xs text-slate-500 mt-1">
+                              <Clock size={10} className="inline mr-1" />
+                              {formatEntryDate(entry.created_at)}
+                            </p>
+                          </div>
+                          {getMoodEmoji(entry.mood) && (
+                            <span className="text-lg">{getMoodEmoji(entry.mood)}</span>
+                          )}
+                        </div>
+                      </motion.div>
+                    ))}
+                  </motion.div>
                 ))}
-              </div>
+              </AnimatePresence>
             </div>
-          ))
-        )}
-      </div>
-    </div>
+          )}
+        </div>
+      </ScrollArea>
+    </motion.div>
   );
 }

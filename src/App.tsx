@@ -1,14 +1,15 @@
 import { useEffect, useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
-import { Save, Sparkles } from "lucide-react";
-import { Settings } from "lucide-react";
-import clsx from "clsx";
+import { Save, Sparkles, Settings, Check, Loader2 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { EntriesSidebar } from "./components/EntriesSidebar";
 import { MarkdownEditor } from "./components/MarkdownEditor";
 import { SettingsModal } from "./components/SettingsModal";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useAutosave } from "./hooks/useAutosave";
+import { Button } from "./components/ui/button";
+import { motion } from "framer-motion";
 import "./App.css";
 
 type Entry = {
@@ -212,8 +213,8 @@ export default function App() {
   });
 
   return (
-    <div className="journal-container">
-      <div className="journal-layout">
+    <div className="h-screen w-full bg-slate-50 overflow-hidden">
+      <div className="flex h-full">
         {/* Sidebar */}
         <EntriesSidebar
           entries={entries ?? []}
@@ -225,71 +226,89 @@ export default function App() {
         />
 
         {/* Main Editor */}
-        <div className="flex-1 flex flex-col bg-surface-secondary">
-          {/* Editor Header */}
-          <div className="flex items-center justify-between px-journal py-4 border-b border-journal-200 bg-surface-primary">
-            <div className="flex-1 max-w-2xl">
+        <motion.div 
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.3, delay: 0.1 }}
+          className="flex-1 flex flex-col bg-white"
+        >
+          {/* Modern Editor Header */}
+          <div className="border-b border-slate-200 bg-gradient-to-b from-white to-slate-50">
+            <div className="px-8 py-6">
               <input
                 value={title}
                 onChange={(e) => handleTitleChange(e.target.value)}
                 onBlur={handleSave}
                 placeholder="Entry title..."
-                className="w-full text-2xl font-semibold text-text-primary bg-transparent border-none outline-none placeholder:text-text-muted focus:placeholder:text-text-tertiary transition-colors duration-150"
+                className="w-full text-3xl font-bold text-slate-900 bg-transparent border-none outline-none placeholder:text-slate-400 focus:placeholder:text-slate-500 transition-colors duration-150"
               />
-            </div>
-            
-            <div className="flex items-center gap-3">
-              {/* Save Status */}
-              <div className="flex items-center gap-2 text-sm">
-                {upsert.isPending ? (
-                  <div className="flex items-center gap-2 text-text-tertiary">
-                    <div className="w-4 h-4 border-2 border-journal-300 border-t-accent-500 rounded-full animate-spin"></div>
-                    <span>Saving...</span>
-                  </div>
-                ) : hasUnsavedChanges ? (
-                  <span className="text-amber-600 font-medium">Unsaved changes</span>
-                ) : selectedId ? (
-                  <span className="text-green-600 font-medium">Saved</span>
-                ) : null}
-              </div>
+              
+              {/* Status and Actions Bar */}
+              <div className="flex items-center justify-between mt-4">
+                {/* Save Status */}
+                <div className="flex items-center gap-2">
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="flex items-center gap-2 text-sm"
+                  >
+                    {upsert.isPending ? (
+                      <div className="flex items-center gap-2 text-slate-500">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Saving...</span>
+                      </div>
+                    ) : hasUnsavedChanges ? (
+                      <div className="flex items-center gap-2 text-amber-600">
+                        <div className="w-2 h-2 bg-amber-600 rounded-full animate-pulse" />
+                        <span className="font-medium">Unsaved changes</span>
+                      </div>
+                    ) : selectedId ? (
+                      <div className="flex items-center gap-2 text-green-600">
+                        <Check className="w-4 h-4" />
+                        <span className="font-medium">All changes saved</span>
+                      </div>
+                    ) : null}
+                  </motion.div>
+                </div>
 
-              {/* Action Buttons */}
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setSettingsOpen(true)}
-                  className="flex items-center gap-2 px-3 py-2 border rounded-md text-sm font-medium transition-all duration-150 focus-ring bg-journal-50 text-text-primary border-journal-200 hover:bg-journal-100 hover:border-journal-300"
-                >
-                  <Settings size={16} />
-                  Settings
-                </button>
-                <button
-                  onClick={handleSave}
-                  disabled={!hasUnsavedChanges || upsert.isPending}
-                  className={clsx(
-                    "flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-all duration-150 focus-ring",
-                    hasUnsavedChanges
-                      ? "bg-accent-500 text-white hover:bg-accent-600"
-                      : "bg-journal-100 text-text-muted cursor-not-allowed"
-                  )}
-                >
-                  <Save size={16} />
-                  Save
-                </button>
-                
-                <button
-                  onClick={makeComic}
-                  disabled={!selectedId}
-                  className="flex items-center gap-2 px-3 py-2 bg-purple-100 text-purple-700 border border-purple-200 rounded-md text-sm font-medium hover:bg-purple-200 hover:border-purple-300 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-150 focus-ring"
-                >
-                  <Sparkles size={16} />
-                  Make Comic
-                </button>
+                {/* Action Buttons */}
+                <div className="flex items-center gap-2">
+                  <Button
+                    onClick={() => setSettingsOpen(true)}
+                    variant="outline"
+                    size="sm"
+                  >
+                    <Settings className="w-4 h-4" />
+                    Settings
+                  </Button>
+                  
+                  <Button
+                    onClick={handleSave}
+                    disabled={!hasUnsavedChanges || upsert.isPending}
+                    variant={hasUnsavedChanges ? "primary" : "secondary"}
+                    size="sm"
+                  >
+                    <Save className="w-4 h-4" />
+                    Save
+                  </Button>
+                  
+                  <Button
+                    onClick={makeComic}
+                    disabled={!selectedId}
+                    variant="secondary"
+                    size="sm"
+                    className="bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white border-0"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    Make Comic
+                  </Button>
+                </div>
               </div>
             </div>
           </div>
 
           {/* Editor */}
-          <div className="flex-1 p-journal">
+          <div className="flex-1 px-8 py-6 overflow-auto">
             <MarkdownEditor
               value={body}
               onChange={handleBodyChange}
@@ -348,7 +367,7 @@ Keyboard shortcuts:
               </div>
             ) : null}
           </div>
-        </div>
+        </motion.div>
       </div>
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>

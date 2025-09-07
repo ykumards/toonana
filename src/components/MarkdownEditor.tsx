@@ -2,7 +2,8 @@ import { useState, useCallback, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Eye, Edit3 } from "lucide-react";
-import clsx from "clsx";
+import { cn } from "@/lib/utils";
+import { motion, AnimatePresence } from "framer-motion";
 
 interface MarkdownEditorProps {
   value: string;
@@ -119,75 +120,92 @@ export function MarkdownEditor({
   }), []);
 
   return (
-    <div className={clsx("flex flex-col h-full bg-surface-primary rounded-journal overflow-hidden shadow-journal", className)}>
-      {/* Mode Toggle */}
-      <div className="flex items-center justify-between px-journal py-3 border-b border-journal-200 bg-surface-secondary min-h-[48px]">
-        <div className="flex gap-0.5 bg-journal-200 rounded-md p-0.5">
+    <div className={cn("flex flex-col h-full bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm", className)}>
+      {/* Modern Mode Toggle */}
+      <div className="flex items-center justify-between px-6 py-3 border-b border-slate-200 bg-gradient-to-b from-slate-50 to-white">
+        <div className="relative flex bg-slate-100 rounded-lg p-1">
+          <div
+            className={cn(
+              "absolute top-1 h-8 bg-white rounded-md shadow-sm transition-all duration-200",
+              mode === "edit" ? "left-1 w-[72px]" : "left-[80px] w-[88px]"
+            )}
+          />
           <button
             onClick={() => setMode("edit")}
-            className={clsx(
-              "flex items-center gap-2 px-3 py-1.5 rounded-sm text-sm font-medium transition-all duration-150",
-              mode === "edit"
-                ? "bg-surface-primary text-text-primary shadow-sm"
-                : "text-text-tertiary hover:text-text-secondary hover:bg-surface-primary/50"
+            className={cn(
+              "relative z-10 flex items-center gap-2 px-3 py-1.5 text-sm font-medium transition-colors duration-200",
+              mode === "edit" ? "text-slate-900" : "text-slate-500 hover:text-slate-700"
             )}
-            aria-label="Edit mode (Cmd+E to toggle)"
-            title="Edit mode (Cmd+E to toggle)"
           >
-            <Edit3 size={16} />
-            <span>Write</span>
+            <Edit3 size={14} />
+            Write
           </button>
           <button
             onClick={() => setMode("preview")}
-            className={clsx(
-              "flex items-center gap-2 px-3 py-1.5 rounded-sm text-sm font-medium transition-all duration-150",
-              mode === "preview"
-                ? "bg-surface-primary text-text-primary shadow-sm"
-                : "text-text-tertiary hover:text-text-secondary hover:bg-surface-primary/50"
+            className={cn(
+              "relative z-10 flex items-center gap-2 px-3 py-1.5 text-sm font-medium transition-colors duration-200",
+              mode === "preview" ? "text-slate-900" : "text-slate-500 hover:text-slate-700"
             )}
-            aria-label="Preview mode (Cmd+E to toggle)"
-            title="Preview mode (Cmd+E to toggle)"
           >
-            <Eye size={16} />
-            <span>Preview</span>
+            <Eye size={14} />
+            Preview
           </button>
         </div>
       </div>
 
-      {/* Editor Content */}
-      <div className="flex flex-1 min-h-0">
-        {mode === "edit" ? (
-          <textarea
-            value={value}
-            onChange={handleTextareaChange}
-            onFocus={() => setFocused(true)}
-            onBlur={() => setFocused(false)}
-            placeholder={placeholder}
-            className={clsx(
-              "flex-1 border-none outline-none p-journal font-sans text-journal-body text-text-primary bg-transparent resize-none overflow-y-auto whitespace-pre-wrap break-words transition-all duration-150",
-              "placeholder:text-text-muted placeholder:italic",
-              focused && "bg-accent-50/30"
-            )}
-            spellCheck="true"
-          />
-        ) : (
-          <div className="flex-1 p-journal overflow-y-auto">
-            {value.trim() ? (
-              <div className="prose prose-gray max-w-none">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  components={markdownComponents}
-                >
-                  {value}
-                </ReactMarkdown>
-              </div>
-            ) : (
-              <div className="flex items-center justify-center h-full text-text-muted italic">
-                <p>Nothing to preview yet. Switch to Write mode to start writing.</p>
-              </div>
-            )}
-          </div>
-        )}
+      {/* Editor Content with Animation */}
+      <div className="flex flex-1 min-h-0 relative">
+        <AnimatePresence mode="wait">
+          {mode === "edit" ? (
+            <motion.div
+              key="editor"
+              initial={{ opacity: 0, x: -10 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -10 }}
+              transition={{ duration: 0.15 }}
+              className="flex-1 flex"
+            >
+              <textarea
+                value={value}
+                onChange={handleTextareaChange}
+                onFocus={() => setFocused(true)}
+                onBlur={() => setFocused(false)}
+                placeholder={placeholder}
+                className={cn(
+                  "flex-1 p-6 font-sans text-base leading-relaxed text-slate-900 bg-transparent resize-none overflow-y-auto",
+                  "placeholder:text-slate-400 placeholder:leading-relaxed",
+                  "focus:outline-none focus:bg-gradient-to-b focus:from-blue-50/50 focus:to-transparent",
+                  "transition-colors duration-200"
+                )}
+                spellCheck="true"
+              />
+            </motion.div>
+          ) : (
+            <motion.div
+              key="preview"
+              initial={{ opacity: 0, x: 10 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 10 }}
+              transition={{ duration: 0.15 }}
+              className="flex-1 p-6 overflow-y-auto"
+            >
+              {value.trim() ? (
+                <div className="prose prose-slate prose-lg max-w-none">
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={markdownComponents}
+                  >
+                    {value}
+                  </ReactMarkdown>
+                </div>
+              ) : (
+                <div className="flex items-center justify-center h-full">
+                  <p className="text-slate-400 italic">Nothing to preview yet. Switch to Write mode to start writing.</p>
+                </div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );
