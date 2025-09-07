@@ -133,12 +133,15 @@ pub async fn generate_image_stream_progress(
         .context("gemini image request failed")?;
     
     if !resp.status().is_success() {
-        error!(http = %resp.status(), "gemini image error");
-        return Err(anyhow!("gemini image error: HTTP {}", resp.status()));
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_else(|_| "<no body>".into());
+        error!(http = %status, body = %text, "gemini image error (stream)");
+        return Err(anyhow!("gemini image error: HTTP {} - {}", status, text));
     }
 
-    // Streamed NDJSON; collect last seen inlineData.data
+    // Streamed NDJSON; collect last seen inlineData.data or HTTP file URI
     let mut latest_b64: Option<String> = None;
+    let mut latest_http_uri: Option<String> = None;
     let mut progress: u32 = 1;
     let total: u32 = 100;
     on_progress(progress, total);
@@ -164,6 +167,57 @@ pub async fn generate_image_stream_progress(
                         if let Some(s) = find_image_data(&json) {
                             latest_b64 = Some(s);
                         }
+                        // Try to capture http(s) URIs as a fallback
+                        fn find_http_uri(v: &serde_json::Value) -> Option<String> {
+                            if let Some(obj) = v.as_object() {
+                                for key in ["fileData", "file_data"] {
+                                    if let Some(fd) = obj.get(key) {
+                                        if let Some(uri) = fd
+                                            .get("fileUri")
+                                            .or_else(|| fd.get("file_uri"))
+                                            .and_then(|u| u.as_str())
+                                        {
+                                            if uri.starts_with("http://") || uri.starts_with("https://") {
+                                                return Some(uri.to_string());
+                                            }
+                                        }
+                                    }
+                                }
+                                for key in ["dataUris", "data_uris"] {
+                                    if let Some(arr) = obj.get(key).and_then(|a| a.as_array()) {
+                                        for s in arr {
+                                            if let Some(u) = s.as_str() {
+                                                if u.starts_with("http://") || u.starts_with("https://") {
+                                                    return Some(u.to_string());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            match v {
+                                serde_json::Value::Array(arr) => {
+                                    for item in arr {
+                                        if let Some(u) = find_http_uri(item) {
+                                            return Some(u);
+                                        }
+                                    }
+                                    None
+                                }
+                                serde_json::Value::Object(map) => {
+                                    for (_k, val) in map.iter() {
+                                        if let Some(u) = find_http_uri(val) {
+                                            return Some(u);
+                                        }
+                                    }
+                                    None
+                                }
+                                _ => None,
+                            }
+                        }
+                        if latest_http_uri.is_none() {
+                            latest_http_uri = find_http_uri(&json);
+                        }
                     }
                 }
                 start = i + 1;
@@ -183,7 +237,18 @@ pub async fn generate_image_stream_progress(
     
     // Finalize progress
     on_progress(99, total);
-    let out = latest_b64.ok_or_else(|| anyhow!("gemini stream: no image data received"))?;
+    let out = if let Some(b64) = latest_b64 {
+        b64
+    } else if let Some(uri) = latest_http_uri {
+        // Best-effort fetch of file URI
+        let bytes = client.get(uri.clone()).send().await
+            .map_err(|e| anyhow!("gemini stream: fetch uri failed: {}", e))?
+            .bytes().await
+            .map_err(|e| anyhow!("gemini stream: read uri bytes failed: {}", e))?;
+        B64.encode(bytes)
+    } else {
+        return Err(anyhow!("gemini stream: no image data received"));
+    };
     on_progress(100, total);
     info!("gemini streaming image generation completed");
     Ok(out)
@@ -234,8 +299,10 @@ pub async fn generate_image_once(prompt: &str, settings: &Settings) -> Result<St
         .context("gemini image request failed")?;
     
     if !resp.status().is_success() {
-        error!(http = %resp.status(), "gemini image error");
-        return Err(anyhow!("gemini image error: HTTP {}", resp.status()));
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_else(|_| "<no body>".into());
+        error!(http = %status, body = %text, "gemini image error (once)");
+        return Err(anyhow!("gemini image error: HTTP {} - {}", status, text));
     }
     
     let value: serde_json::Value = resp.json().await
@@ -314,6 +381,66 @@ pub async fn generate_image_once(prompt: &str, settings: &Settings) -> Result<St
         info!("gemini non-streaming image generation completed");
         return Ok(s);
     }
+    // Try to locate an HTTP file URI and fetch it
+    fn find_http_uri(v: &serde_json::Value) -> Option<String> {
+        if let Some(obj) = v.as_object() {
+            for key in ["fileData", "file_data"] {
+                if let Some(fd) = obj.get(key) {
+                    if let Some(uri) = fd
+                        .get("fileUri")
+                        .or_else(|| fd.get("file_uri"))
+                        .and_then(|u| u.as_str())
+                    {
+                        if uri.starts_with("http://") || uri.starts_with("https://") {
+                            return Some(uri.to_string());
+                        }
+                    }
+                }
+            }
+            for key in ["dataUris", "data_uris"] {
+                if let Some(arr) = obj.get(key).and_then(|a| a.as_array()) {
+                    for s in arr {
+                        if let Some(u) = s.as_str() {
+                            if u.starts_with("http://") || u.starts_with("https://") {
+                                return Some(u.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        match v {
+            serde_json::Value::Array(arr) => {
+                for item in arr {
+                    if let Some(u) = find_http_uri(item) {
+                        return Some(u);
+                    }
+                }
+                None
+            }
+            serde_json::Value::Object(map) => {
+                for (_k, val) in map.iter() {
+                    if let Some(u) = find_http_uri(val) {
+                        return Some(u);
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+    if let Some(uri) = find_http_uri(&value) {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .connect_timeout(Duration::from_secs(10))
+            .build()?;
+        let bytes = client.get(uri.clone()).send().await
+            .map_err(|e| anyhow!("gemini once: fetch uri failed: {}", e))?
+            .bytes().await
+            .map_err(|e| anyhow!("gemini once: read uri bytes failed: {}", e))?;
+        info!("gemini non-streaming image fetched via file URI");
+        return Ok(B64.encode(bytes));
+    }
 
     Err(anyhow!("gemini image: no inline image data in response"))
 }
@@ -339,6 +466,21 @@ fn build_prompt_with_avatar_text(prompt: &str, settings: &Settings) -> String {
         out.push_str(desc);
     }
     out
+}
+
+pub fn build_avatar_image_prompt(description: &str) -> String {
+    format!(r#"Task: Render a single character portrait avatar image.
+
+Framing & Style Guidelines:
+- Waist-up framing, clean/neutral background, neutral lighting.
+- Keep character consistent across future images.
+- Avoid text, watermarks, UI elements.
+- Illustration vibe: cohesive, appealing, readable at small sizes.
+
+Output: One portrait image.
+
+Character Description:
+{}"#, description)
 }
 
 fn try_build_avatar_image_part(settings: &Settings) -> Option<serde_json::Value> {
@@ -392,7 +534,9 @@ pub async fn nano_banana_generate_image(
         .map_err(|e| format!("nano-banana request failed: {e}"))?;
     
     if !resp.status().is_success() {
-        return Err(format!("nano-banana error: HTTP {}", resp.status()));
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_else(|_| "<no body>".into());
+        return Err(format!("nano-banana error: HTTP {} - {}", status, text));
     }
     
     let value: serde_json::Value = resp.json().await

@@ -257,19 +257,33 @@ async fn export_pdf(
 async fn generate_avatar_image(prompt: String) -> Result<String, String> {
     let state = STARTUP.as_ref().map_err(|e| e.to_string())?.clone();
     let settings = load_settings_from_dir(&state.data_dir);
-    let full_prompt = format!(
-        "Create a portrait avatar in a consistent illustrative style. Waist‑up framing, clean background, neutral lighting. Avoid text and watermarks. Character description: {}",
-        prompt
+    let full_prompt = gemini::build_avatar_image_prompt(&prompt);
+    tracing::info!(
+        nano_banana = %settings.nano_banana_base_url.as_deref().unwrap_or("(none)"),
+        desc_len = full_prompt.len(),
+        "avatar: start generation"
     );
     if settings.nano_banana_base_url.is_some() {
         match gemini::nano_banana_generate_image(&full_prompt, &settings).await {
-            Ok(s) => return Ok(s),
-            Err(_) => {}
+            Ok(s) => {
+                tracing::info!("avatar: nano-banana success");
+                return Ok(s);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "avatar: nano-banana failed, falling back to gemini (stream)");
+            }
         }
     }
-    gemini::generate_image_once(&full_prompt, &settings)
-        .await
-        .map_err(|e| format!("avatar generation failed: {}", e))
+    match gemini::generate_image_with_progress(&full_prompt, &settings, |_c, _t| {}).await {
+        Ok(s) => {
+            tracing::info!("avatar: gemini (stream) success");
+            Ok(s)
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "avatar: gemini (stream) failed");
+            Err(format!("avatar generation failed: {}", e))
+        }
+    }
 }
 
 #[tauri::command]
@@ -281,6 +295,7 @@ async fn save_avatar_image(base64_png: String) -> Result<String, String> {
     let _ = std::fs::create_dir_all(&avatars_dir);
     let path = avatars_dir.join(format!("avatar.{}", ext));
     std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+    tracing::info!(path = %path.display(), ext = %ext, "avatar: saved image to disk");
     // Update settings with saved path
     let mut s = load_settings_from_dir(&state.data_dir);
     s.avatar_image_path = Some(path.display().to_string());
