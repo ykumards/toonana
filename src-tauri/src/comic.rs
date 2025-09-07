@@ -88,7 +88,7 @@ Layout Guidelines:
 - Maintain clear line art, readable bubbles, cohesive backgrounds.
 - Tone: light, charming, hopeful.
 
-Output: One coherent 3-panel comic image (single row).
+Output: One coherent 3-4 panel comic image (single row).
 
 Storyboard:
 {}"#,

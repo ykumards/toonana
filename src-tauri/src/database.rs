@@ -299,3 +299,26 @@ pub async fn get_entry_body(pool: &Pool<Sqlite>, entry_id: &str) -> Result<Strin
     
     Ok(text)
 }
+
+pub async fn delete_entry(pool: &Pool<Sqlite>, id: &str) -> Result<(), String> {
+    // Remove dependent rows first to maintain integrity
+    let _ = sqlx::query(r#"DELETE FROM panels WHERE entry_id = ?1"#)
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let _ = sqlx::query(r#"DELETE FROM storyboards WHERE entry_id = ?1"#)
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let _ = sqlx::query(r#"DELETE FROM entries WHERE id = ?1"#)
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}

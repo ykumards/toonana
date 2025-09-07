@@ -125,6 +125,32 @@ export default function App() {
     },
   });
 
+  const removeEntry = useMutation({
+    mutationFn: async (id: string) => {
+      return invoke<void>("db_delete_entry", { id });
+    },
+    onMutate: async (id: string) => {
+      await qc.cancelQueries({ queryKey: ["entries"] });
+      const prev = qc.getQueryData<EntryListItem[] | undefined>(["entries"]);
+      if (prev) {
+        qc.setQueryData<EntryListItem[]>(["entries"], prev.filter(e => e.id !== id));
+      }
+      return { prev } as { prev?: EntryListItem[] };
+    },
+    onError: (err, _id, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["entries"], ctx.prev);
+      window.alert(`Delete failed: ${String(err)}`);
+    },
+    onSuccess: async (_, id) => {
+      if (selectedId === id) {
+        setSelectedId(null);
+        setBody("");
+        setHasUnsavedChanges(false);
+      }
+      await qc.invalidateQueries({ queryKey: ["entries"] });
+    }
+  });
+
   const loadEntry = async (id: string) => {
     // Save current entry if there are unsaved changes
     if (hasUnsavedChanges) {
@@ -287,6 +313,15 @@ export default function App() {
               setSidebarOpen(false);
             }}
             searchInputRef={searchInputRef}
+            onDeleteEntry={async (id) => {
+              console.log("Deleting entry", id);
+              try {
+                await removeEntry.mutateAsync(id);
+                console.log("Delete request sent", id);
+              } catch (e) {
+                console.error("Delete failed", e);
+              }
+            }}
           />
         </div>
 

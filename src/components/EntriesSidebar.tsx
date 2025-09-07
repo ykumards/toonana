@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { format, formatDistance } from "date-fns";
-import { Search, Plus, BookOpen, Calendar, FileText, Clock } from "lucide-react";
+import { Search, Plus, BookOpen, Calendar, FileText, Clock, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "./ui/scroll-area";
 import { Button } from "./ui/button";
@@ -22,6 +22,7 @@ interface EntriesSidebarProps {
   onEntrySelect: (id: string) => void;
   onNewEntry: () => void;
   searchInputRef?: React.RefObject<HTMLInputElement | null> | React.MutableRefObject<HTMLInputElement | null>;
+  onDeleteEntry?: (id: string) => void;
 }
 
 export function EntriesSidebar({ 
@@ -30,7 +31,8 @@ export function EntriesSidebar({
   isLoading, 
   onEntrySelect, 
   onNewEntry,
-  searchInputRef 
+  searchInputRef,
+  onDeleteEntry
 }: EntriesSidebarProps) {
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -229,15 +231,28 @@ export function EntriesSidebar({
                     {groupEntries.map((entry) => (
                       <div
                         key={entry.id}
-                        onClick={() => onEntrySelect(entry.id)}
                         className={cn(
-                          "p-2 sm:p-3 rounded-lg cursor-pointer transition-all",
+                          "group relative p-2 sm:p-3 rounded-lg cursor-pointer transition-all",
                           "hover:shadow-md hover:bg-white",
                           entry.id === selectedId
                             ? "bg-gradient-to-r from-blue-50 to-blue-100 border border-blue-200 shadow-md"
                             : "bg-white border border-slate-200"
                         )}
                       >
+                        {/* Hover Trash Icon */}
+                        {onDeleteEntry && (
+                          <button
+                            type="button"
+                            className="absolute right-2 top-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity items-center justify-center w-6 h-6 rounded-md bg-rose-50 text-rose-600 hover:bg-rose-100 flex"
+                            title="Delete entry"
+                            aria-label="Delete entry"
+                            onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); console.log("trash click (pointer)", entry.id); onDeleteEntry(entry.id); }}
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); console.log("trash click (click)", entry.id); onDeleteEntry(entry.id); }}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        <div onClick={() => onEntrySelect(entry.id)}>
                         <p className="text-xs text-slate-500 mb-1">
                           <Clock className="inline mr-1 w-2.5 h-2.5" />
                           {formatEntryDate(entry.created_at)}
@@ -255,6 +270,7 @@ export function EntriesSidebar({
                         }}>
                           {entry.body_preview || "Empty entry"}
                         </p>
+                        </div>
                       </div>
                     ))}
                   </motion.div>

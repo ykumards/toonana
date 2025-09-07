@@ -21,7 +21,7 @@ use tracing_appender::rolling;
 
 use crate::comic::{ComicJobStatus, ComicStage, ExportPanel, JobId};
 use crate::database::{
-    create_pool, get_entry, list_entries, now_iso, upsert_entry, 
+    create_pool, get_entry, list_entries, now_iso, upsert_entry, delete_entry,
     Entry, EntryListItem, EntryUpsert, ListParams
 };
 use crate::settings::{load_settings_from_dir, save_settings_to_dir, Settings};
@@ -362,6 +362,19 @@ async fn list_comics_by_day(
     Ok(items)
 }
 
+#[tauri::command]
+async fn db_delete_entry(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    delete_entry(&state.db, &id).await?;
+    let img_dir = state.data_dir.join("images").join(&id);
+    if img_dir.exists() {
+        let _ = tokio::fs::remove_dir_all(&img_dir).await;
+    }
+    Ok(())
+}
+
 // ===== Startup and Main =====
 
 static STARTUP: Lazy<Result<AppState>> = Lazy::new(|| tauri_startup());
@@ -402,6 +415,7 @@ pub fn run() {
             db_upsert_entry,
             db_get_entry,
             db_list_entries,
+            db_delete_entry,
             save_image_to_disk,
             export_pdf,
             create_comic_job,
