@@ -70,7 +70,7 @@ export function ComicProgressModal({ open, status, onClose, onCancel }: Props) {
             role="dialog"
             aria-modal="true"
             className={cn(
-              "relative w-[680px] max-w-[92vw] max-h-[85vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-2xl",
+              "relative w-[680px] max-w-[92vw] max-h-[85vh] overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl",
             )}
             initial={{ y: 24, scale: 0.98, opacity: 0 }}
             animate={{ y: 0, scale: 1, opacity: 1 }}
@@ -79,7 +79,7 @@ export function ComicProgressModal({ open, status, onClose, onCancel }: Props) {
           >
             <div className="absolute right-3 top-3">
               <button
-                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-500 hover:bg-slate-100"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-400 hover:bg-slate-800"
                 onClick={onClose}
                 aria-label="Close"
               >
@@ -96,8 +96,8 @@ export function ComicProgressModal({ open, status, onClose, onCancel }: Props) {
                   </div>
                 </div>
                 <div className="">
-                  <div className="text-lg font-semibold text-slate-900">Cartoonify in progress</div>
-                  <div className="text-sm text-slate-500">{subtitle}</div>
+                  <div className="text-lg font-semibold text-white">Cartoonify in progress</div>
+                  <div className="text-sm text-slate-400">{subtitle}</div>
                 </div>
               </div>
             </div>
@@ -128,12 +128,12 @@ export function ComicProgressModal({ open, status, onClose, onCancel }: Props) {
               </div>
 
               {/* Live storyboard */}
-              <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50/50 p-4">
+              <div className="mt-5 rounded-xl border border-slate-700 bg-slate-800/50 p-4">
                 <div className="mb-1 flex items-center justify-between">
                   <div className="text-sm font-medium text-slate-700">Storyboard (live)</div>
                   <div className="text-xs tabular-nums text-slate-400">{status?.updated_at}</div>
                 </div>
-                <div className="max-h-44 overflow-auto rounded-md bg-white p-3 text-sm leading-relaxed text-slate-700">
+                <div className="max-h-44 overflow-auto rounded-md bg-slate-800 p-3 text-sm leading-relaxed text-slate-300">
                   {status?.storyboard_text ? (
                     <pre className="whitespace-pre-wrap font-mono text-[12px] text-slate-700">{status.storyboard_text}</pre>
                   ) : (
@@ -148,7 +148,7 @@ export function ComicProgressModal({ open, status, onClose, onCancel }: Props) {
               {/* Result image or animated placeholder while rendering */}
               <div className="mt-5">
                 <div className="text-sm font-medium text-slate-700">Preview</div>
-                <div className="mt-2 overflow-hidden rounded-xl border border-slate-200 bg-white min-h-[180px] flex items-center justify-center">
+                <div className="mt-2 overflow-hidden rounded-xl border border-slate-700 bg-slate-800 min-h-[180px] flex items-center justify-center">
                   {status?.result_image_path ? (
                     <button
                       onClick={() => setFullPreviewOpen(true)}
@@ -161,11 +161,11 @@ export function ComicProgressModal({ open, status, onClose, onCancel }: Props) {
                         alt="Generated comic preview"
                       />
                       <div className="pointer-events-none absolute inset-0 hidden items-center justify-center bg-black/20 group-hover:flex">
-                        <span className="rounded-md bg-white/90 px-2 py-1 text-xs text-slate-700 shadow">Click to preview</span>
+                        <span className="rounded-md bg-slate-900/90 px-2 py-1 text-xs text-slate-300 shadow">Click to preview</span>
                       </div>
                     </button>
                   ) : (
-                    <div className="flex items-center gap-3 text-slate-500">
+                    <div className="flex items-center gap-3 text-slate-400">
                       <div className="h-6 w-6 rounded-full border-2 border-slate-200 border-t-transparent animate-spin" />
                       <span className="text-sm">Brewing pixels…</span>
                     </div>
@@ -191,7 +191,7 @@ export function ComicProgressModal({ open, status, onClose, onCancel }: Props) {
               <div className="absolute inset-0 bg-black/70" onClick={() => setFullPreviewOpen(false)} />
               <div className="relative max-w-[92vw] max-h-[92vh] p-2">
                 <button
-                  className="absolute -top-3 -right-3 inline-flex h-8 w-8 items-center justify-center rounded-full bg-white text-slate-600 shadow hover:bg-slate-100"
+                  className="absolute -top-3 -right-3 inline-flex h-8 w-8 items-center justify-center rounded-full bg-slate-800 text-slate-400 shadow hover:bg-slate-700"
                   onClick={() => setFullPreviewOpen(false)}
                   aria-label="Close preview"
                 >

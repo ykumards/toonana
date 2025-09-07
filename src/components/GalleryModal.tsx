@@ -63,7 +63,7 @@ export function GalleryModal({ open, onClose, onSelect }: Props) {
             role="dialog"
             aria-modal="true"
             className={cn(
-              "relative w-[1000px] max-w-[96vw] max-h-[90vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-2xl",
+              "relative w-[1000px] max-w-[96vw] max-h-[90vh] overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl",
             )}
             initial={{ y: 24, scale: 0.98, opacity: 0 }}
             animate={{ y: 0, scale: 1, opacity: 1 }}
@@ -72,7 +72,7 @@ export function GalleryModal({ open, onClose, onSelect }: Props) {
           >
             <div className="absolute right-3 top-3">
               <button
-                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-500 hover:bg-slate-100"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-400 hover:bg-slate-800"
                 onClick={onClose}
                 aria-label="Close"
               >
@@ -89,15 +89,15 @@ export function GalleryModal({ open, onClose, onSelect }: Props) {
                   </div>
                 </div>
                 <div className="">
-                  <div className="text-lg font-semibold text-slate-900">Gallery</div>
-                  <div className="text-sm text-slate-500">Browse comics by day</div>
+                  <div className="text-lg font-semibold text-white">Gallery</div>
+                  <div className="text-sm text-slate-400">Browse comics by day</div>
                 </div>
               </div>
             </div>
 
             <div className="px-6 pb-6">
               {loading ? (
-                <div className="flex h-32 items-center justify-center text-slate-500">Loading…</div>
+                <div className="flex h-32 items-center justify-center text-slate-400">Loading…</div>
               ) : error ? (
                 <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{error}</div>
               ) : days && days.length > 0 ? (
@@ -110,7 +110,7 @@ export function GalleryModal({ open, onClose, onSelect }: Props) {
                           <button
                             key={c.image_path}
                             onClick={() => setLightbox(c)}
-                            className="group relative overflow-hidden rounded-lg border border-slate-200 bg-white hover:shadow-md transition-shadow"
+                            className="group relative overflow-hidden rounded-lg border border-slate-700 bg-slate-800 hover:shadow-md transition-shadow"
                             title={c.created_at}
                           >
                             <img
@@ -126,7 +126,7 @@ export function GalleryModal({ open, onClose, onSelect }: Props) {
                   ))}
                 </div>
               ) : (
-                <div className="flex h-32 items-center justify-center text-slate-500">No comics yet</div>
+                <div className="flex h-32 items-center justify-center text-slate-400">No comics yet</div>
               )}
             </div>
 

@@ -381,7 +381,7 @@ export default function App() {
                     <span
                       className={`text-xs font-medium ${ollamaHealth?.ok ? "text-emerald-400" : "text-rose-400"}`}
                     >
-                      {ollamaHealth?.ok ? "Ollama online" : "Ollama offline"}
+                      {ollamaHealth?.ok ? "Ollama Online" : "Ollama Offline"}
                     </span>
                   </div>
                 </div>

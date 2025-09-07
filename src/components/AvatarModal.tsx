@@ -154,17 +154,17 @@ export function AvatarModal({ open, onClose, onSaved }: AvatarModalProps) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/30" onClick={!generating ? onClose : undefined} />
-      <div className="relative w-full max-w-2xl rounded-lg bg-white shadow-lg border border-journal-200">
-        <div className="px-5 py-4 border-b border-journal-200 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Your Character</h2>
-          <button onClick={!generating ? onClose : undefined} disabled={generating} className="text-text-muted hover:text-text-primary disabled:opacity-50">✕</button>
+      <div className="relative w-full max-w-2xl rounded-lg bg-slate-900 shadow-lg border border-slate-700">
+        <div className="px-5 py-4 border-b border-slate-700 flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-white">Your Character</h2>
+          <button onClick={!generating ? onClose : undefined} disabled={generating} className="text-slate-400 hover:text-white disabled:opacity-50">✕</button>
         </div>
         <div className="p-5 space-y-4">
           {loading ? (
-            <div className="text-text-tertiary">Loading…</div>
+            <div className="text-slate-400">Loading…</div>
           ) : (
             <>
-              <p className="text-sm text-text-tertiary">
+              <p className="text-sm text-slate-400">
                 Describe yourself as a stylized character. We'll use this as your avatar in comics.
                 Mention hair, clothing, vibe, key accessories, and any defining traits.
               </p>
@@ -172,9 +172,9 @@ export function AvatarModal({ open, onClose, onSaved }: AvatarModalProps) {
                 value={avatar}
                 onChange={(e) => setAvatar(e.target.value)}
                 placeholder="e.g., A cheerful 30‑something with short wavy hair, round glasses, cozy earth‑tone sweater, denim jacket with enamel pins, always carrying a sketchbook; warm, curious vibe."
-                className="w-full min-h-40 px-3 py-2 border border-journal-300 rounded-md bg-white"
+                className="w-full min-h-40 px-3 py-2 border border-slate-700 rounded-md bg-slate-800 text-white placeholder:text-slate-500"
               />
-              <div className="text-xs text-text-tertiary">
+              <div className="text-xs text-slate-400">
                 Tip: Keep it concise but evocative (2‑4 sentences). We'll integrate this into prompts later.
               </div>
               <div className="flex items-center justify-between gap-4">
@@ -182,17 +182,17 @@ export function AvatarModal({ open, onClose, onSaved }: AvatarModalProps) {
                   {existingSrc ? (
                     <button
                       onClick={() => setLightboxSrc(existingSrc)}
-                      className="relative border rounded-md overflow-hidden border-journal-300"
+                      className="relative border rounded-md overflow-hidden border-slate-700"
                       title="Click to expand current avatar"
                     >
                       <img src={existingSrc} alt="Current avatar" className="w-16 h-16 object-cover" />
                     </button>
                   ) : (
-                    <div className="w-16 h-16 rounded-md border border-dashed border-journal-300 grid place-items-center text-xs text-text-tertiary">None</div>
+                    <div className="w-16 h-16 rounded-md border border-dashed border-slate-700 grid place-items-center text-xs text-slate-400">None</div>
                   )}
                   <div>
-                    <div className="text-sm font-medium">Current avatar</div>
-                    <div className="text-xs text-text-tertiary">{existingPath ? "Set" : "Not set"}</div>
+                    <div className="text-sm font-medium text-white">Current avatar</div>
+                    <div className="text-xs text-slate-400">{existingPath ? "Set" : "Not set"}</div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -212,32 +212,32 @@ export function AvatarModal({ open, onClose, onSaved }: AvatarModalProps) {
                     <button
                       key={idx}
                       onClick={() => { setSelectedIdx(idx); setLightboxSrc(b64.startsWith("data:") ? b64 : `data:image/png;base64,${b64}`); }}
-                      className={`relative border rounded-md overflow-hidden ${selectedIdx === idx ? "ring-2 ring-accent-500" : "border-journal-300"}`}
+                      className={`relative border rounded-md overflow-hidden ${selectedIdx === idx ? "ring-2 ring-blue-500" : "border-slate-700"}`}
                       title="Click to expand"
                     >
                       <img src={b64.startsWith("data:") ? b64 : `data:image/png;base64,${b64}`} alt={`Preview ${idx+1}`} className="w-24 h-24 object-cover" />
                     </button>
                   ))}
-                  <div className="text-xs text-text-tertiary">Preview not saved yet — click Save to keep it.</div>
+                  <div className="text-xs text-slate-400">Preview not saved yet — click Save to keep it.</div>
                 </div>
               )}
             </>
           )}
         </div>
-        <div className="px-5 py-4 border-t border-journal-200 flex justify-end gap-2">
-          <button onClick={!generating ? onClose : undefined} disabled={generating} className="px-4 py-2 rounded-md border border-journal-300 bg-white text-text-primary disabled:opacity-50">Cancel</button>
+        <div className="px-5 py-4 border-t border-slate-700 flex justify-end gap-2">
+          <button onClick={!generating ? onClose : undefined} disabled={generating} className="px-4 py-2 rounded-md border border-slate-700 bg-slate-800 text-white hover:bg-slate-700 disabled:opacity-50">Cancel</button>
           <button onClick={handleSave} disabled={generating || saving || (previews.length > 0 && selectedIdx == null)} className="px-4 py-2 rounded-md bg-accent-500 text-white hover:bg-accent-600">{saving ? "Saving…" : "Save"}</button>
         </div>
 
         {generating && (
-          <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center">
+          <div className="absolute inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center">
             <div className="flex flex-col items-center gap-2">
               <svg className="animate-spin h-6 w-6 text-accent-600" viewBox="0 0 24 24">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
               </svg>
-              <div className="text-sm text-text-tertiary">Generating avatar {genStep}%…</div>
-              <div className="text-xs text-text-tertiary">This can take up to ~20 seconds</div>
+              <div className="text-sm text-slate-400">Generating avatar {genStep}%…</div>
+              <div className="text-xs text-slate-400">This can take up to ~20 seconds</div>
             </div>
           </div>
         )}
