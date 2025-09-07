@@ -1,8 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { Save, Sparkles, Settings, Check, Loader2 } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { EntriesSidebar } from "./components/EntriesSidebar";
 import { MarkdownEditor } from "./components/MarkdownEditor";
 import { SettingsModal } from "./components/SettingsModal";
@@ -11,6 +10,13 @@ import { useAutosave } from "./hooks/useAutosave";
 import { Button } from "./components/ui/button";
 import { motion } from "framer-motion";
 import "./App.css";
+import { ComicProgressModal } from "./components/ComicProgressModal";
+
+type OllamaHealth = {
+  ok: boolean;
+  message?: string | null;
+  models?: string[] | null;
+};
 
 type Entry = {
   id: string;
@@ -101,6 +107,8 @@ export default function App() {
   const [comicStatus, setComicStatus] = useState<ComicJobStatus | null>(null);
   const [isPolling, setIsPolling] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [progressOpen, setProgressOpen] = useState(false);
+  const [ollamaHealth, setOllamaHealth] = useState<OllamaHealth | null>(null);
 
   const upsert = useMutation({
     mutationFn: async () => {
@@ -146,20 +154,65 @@ export default function App() {
   };
 
   const makeComic = async () => {
-    if (!selectedId) return;
-    const job = await invoke<string>("create_comic_job", { entry_id: selectedId, style: "nano-banana" });
-    setComicJobId(job);
-    setIsPolling(true);
+    if (!selectedId) {
+      console.warn("Make Comic pressed but no entry selected");
+      return;
+    }
+    // Open modal immediately so users see progress even if backend call is slow
+    setProgressOpen(true);
+    console.log("Creating comic job for entry", selectedId);
+    try {
+      const job = await invoke<string>("create_comic_job", { entryId: selectedId, style: "nano-banana" });
+      console.log("Comic job created", job);
+      setComicJobId(job);
+      setIsPolling(true);
+    } catch (e) {
+      console.error("Failed to create comic job", e);
+      // Surface failure in the modal
+      setComicStatus({
+        job_id: "local",
+        entry_id: selectedId,
+        style: "nano-banana",
+        stage: { stage: "failed", error: String(e) },
+        updated_at: new Date().toISOString(),
+        result_image_path: null,
+        storyboard_text: null,
+      });
+      setIsPolling(false);
+    }
   };
+
+  // Light-weight health polling for Ollama
+  useEffect(() => {
+    let stopped = false;
+    const check = async () => {
+      try {
+        const h = await invoke<OllamaHealth>("ollama_health");
+        if (!stopped) setOllamaHealth(h);
+      } catch {
+        if (!stopped) setOllamaHealth({ ok: false, message: "unreachable", models: null });
+      }
+    };
+    check();
+    const id = setInterval(check, 5000);
+    return () => {
+      stopped = true;
+      clearInterval(id);
+    };
+  }, []);
 
   useEffect(() => {
     if (!comicJobId || !isPolling) return;
     let stopped = false;
     const poll = async () => {
       try {
-        const status = await invoke<ComicJobStatus>("get_comic_job_status", { job_id: comicJobId });
+        const status = await invoke<ComicJobStatus>("get_comic_job_status", { jobId: comicJobId });
         if (stopped) return;
         setComicStatus(status);
+        try {
+          const s = status.stage as ComicStage;
+          console.log("Comic status", s);
+        } catch {}
         const stage = status.stage as ComicStage;
         if (stage.stage === "done" || stage.stage === "failed") {
           setIsPolling(false);
@@ -167,6 +220,7 @@ export default function App() {
         }
       } catch (e) {
         // stop polling on error
+        console.error("Polling error", e);
         setIsPolling(false);
         return;
       }
@@ -245,8 +299,8 @@ export default function App() {
               
               {/* Status and Actions Bar */}
               <div className="flex items-center justify-between mt-4">
-                {/* Save Status */}
-                <div className="flex items-center gap-2">
+                {/* Save Status + Ollama indicator */}
+                <div className="flex items-center gap-4">
                   <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
@@ -269,6 +323,19 @@ export default function App() {
                       </div>
                     ) : null}
                   </motion.div>
+                  <div className="flex items-center gap-2 text-xs">
+                    <span
+                      className={
+                        "inline-block h-2 w-2 rounded-full " +
+                        (ollamaHealth?.ok ? "bg-green-500" : "bg-rose-500 animate-pulse")
+                      }
+                    />
+                    <span
+                      className={ollamaHealth?.ok ? "text-green-600" : "text-rose-600"}
+                    >
+                      {ollamaHealth?.ok ? "Ollama online" : "Ollama offline"}
+                    </span>
+                  </div>
                 </div>
 
                 {/* Action Buttons */}
@@ -331,45 +398,23 @@ Keyboard shortcuts:
 - Cmd/Ctrl + K: Focus search"
               className="h-full"
             />
-            {comicStatus ? (
-              <div className="mt-3 text-sm text-text-tertiary">
-                {(() => {
-                  const s = comicStatus.stage as ComicStage;
-                  if (s.stage === "rendering") {
-                    return `Rendering panels ${s.completed}/${s.total}...`;
-                  }
-                  if (s.stage === "failed") {
-                    return `Failed: ${s.error}`;
-                  }
-                  if (s.stage === "done") {
-                    return "Comic ready.";
-                  }
-                  return `Stage: ${s.stage}`;
-                })()}
-              </div>
-            ) : null}
-
-            {comicStatus?.storyboard_text ? (
-              <div className="mt-3 p-3 border border-journal-200 rounded-md bg-journal-50">
-                <div className="text-sm font-medium mb-1 text-text-primary">Storyboard</div>
-                <pre className="whitespace-pre-wrap text-sm text-text-secondary">{comicStatus.storyboard_text}</pre>
-              </div>
-            ) : null}
-
-            {comicStatus?.result_image_path ? (
-              <div className="mt-3">
-                <div className="text-sm font-medium mb-1 text-text-primary">Generated Image</div>
-                <img
-                  src={convertFileSrc(comicStatus.result_image_path)}
-                  alt="Generated comic"
-                  className="max-w-full rounded-md border border-journal-200"
-                />
-              </div>
-            ) : null}
+            {/* The inline status blocks were moved into the progress modal for a cleaner UX */}
           </div>
         </motion.div>
       </div>
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <ComicProgressModal
+        open={progressOpen}
+        status={comicStatus}
+        onClose={() => setProgressOpen(false)}
+        onCancel={async () => {
+          if (comicJobId) {
+            try { await invoke("cancel_job", { jobId: comicJobId }); } catch {}
+          }
+          setIsPolling(false);
+          setProgressOpen(false);
+        }}
+      />
     </div>
   );
 }

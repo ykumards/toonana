@@ -7,6 +7,8 @@ type Settings = {
   default_ollama_model?: string | null;
   ollama_temperature?: number | null;
   ollama_top_p?: number | null;
+  nano_banana_base_url?: string | null;
+  nano_banana_api_key?: string | null;
 };
 
 type OllamaHealth = {
@@ -126,6 +128,29 @@ export function SettingsModal({ open, onClose, onSaved }: SettingsModalProps) {
                     <button onClick={handleRefreshModels} className="px-3 py-2 border border-journal-300 rounded-md bg-journal-50">Refresh</button>
                   </div>
                   <div className="mt-1 text-xs text-text-tertiary">{statusText}</div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Nano-Banana Base URL</label>
+                  <input
+                    type="text"
+                    value={settings.nano_banana_base_url || ""}
+                    onChange={(e) => setSettings(s => ({ ...s, nano_banana_base_url: e.target.value }))}
+                    placeholder="https://api.nano-banana.local"
+                    className="w-full px-3 py-2 border border-journal-300 rounded-md bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Nano-Banana API Key</label>
+                  <input
+                    type="password"
+                    value={settings.nano_banana_api_key || ""}
+                    onChange={(e) => setSettings(s => ({ ...s, nano_banana_api_key: e.target.value }))}
+                    placeholder="Optional"
+                    className="w-full px-3 py-2 border border-journal-300 rounded-md bg-white"
+                  />
                 </div>
               </div>
 

@@ -5582,6 +5582,7 @@ dependencies = [
  "base64 0.22.1",
  "dashmap",
  "directories",
+ "futures-util",
  "keyring",
  "once_cell",
  "rand 0.8.5",

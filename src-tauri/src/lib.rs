@@ -12,6 +12,7 @@ use time::OffsetDateTime;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 use reqwest::StatusCode;
+use futures_util::StreamExt;
 
 // kept for potential future re-enable of encryption
 #[allow(dead_code)]
@@ -42,6 +43,8 @@ struct Settings {
     default_ollama_model: Option<String>,
     ollama_temperature: Option<f32>,
     ollama_top_p: Option<f32>,
+    nano_banana_base_url: Option<String>,
+    nano_banana_api_key: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -176,6 +179,104 @@ async fn gemini_generate(prompt: &str) -> Result<String> {
     Err(anyhow!("gemini: no text in response"))
 }
 
+async fn gemini_generate_image_stream_progress(
+    prompt: &str,
+    mut on_progress: impl FnMut(u32, u32),
+) -> Result<String> {
+    let state_ref = STARTUP.as_ref().map_err(|_| anyhow!("startup not ready"))?;
+    let settings = load_settings_from_dir(&state_ref.data_dir);
+    let api_key = settings
+        .gemini_api_key
+        .or_else(|| std::env::var("GEMINI_API_KEY").ok())
+        .context("Gemini API key not set")?;
+    let model_id = "gemini-2.5-flash-image-preview";
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent",
+        model_id
+    );
+    let body = serde_json::json!({
+        "contents": [
+            {
+                "role": "user",
+                "parts": [ { "text": prompt } ]
+            }
+        ],
+        "generationConfig": {
+            "responseModalities": ["IMAGE", "TEXT"]
+        }
+    });
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(url)
+        .header("X-goog-api-key", api_key)
+        .json(&body)
+        .send()
+        .await
+        .context("gemini image request failed")?;
+    if !resp.status().is_success() {
+        return Err(anyhow!("gemini image error: HTTP {}", resp.status()));
+    }
+
+    // Streamed NDJSON; collect last seen inlineData.data
+    let mut latest_b64: Option<String> = None;
+    let mut progress: u32 = 1; // start at 1 for a visible tick
+    let total: u32 = 100;
+    on_progress(progress, total);
+    let mut buf = String::new();
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let bytes = chunk.map_err(|e| anyhow!("gemini stream error: {}", e))?;
+        let s = String::from_utf8_lossy(&bytes);
+        buf.push_str(&s);
+        let mut start = 0usize;
+        for (i, ch) in buf.char_indices() {
+            if ch == '\n' {
+                let line = &buf[start..i];
+                if !line.trim().is_empty() {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                        // Try common structures
+                        // 1) top-level candidates[].content.parts[].inlineData.data
+                        if let Some(cands) = json.get("candidates").and_then(|v| v.as_array()) {
+                            for cand in cands {
+                                if let Some(parts) = cand
+                                    .get("content")
+                                    .and_then(|c| c.get("parts"))
+                                    .and_then(|p| p.as_array())
+                                {
+                                    for p in parts {
+                                        if let Some(inline) = p.get("inlineData").or_else(|| p.get("inline_data")) {
+                                            if let Some(data) = inline.get("data").and_then(|d| d.as_str()) {
+                                                latest_b64 = Some(data.to_string());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // 2) sometimes the chunk is simply a part
+                        if latest_b64.is_none() {
+                            if let Some(inline) = json.get("inlineData").or_else(|| json.get("inline_data")) {
+                                if let Some(data) = inline.get("data").and_then(|d| d.as_str()) {
+                                    latest_b64 = Some(data.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+                start = i + 1;
+                // Nudge progress for each processed line; cap below 98
+                if progress < 98 { progress = progress.saturating_add(2); on_progress(progress, total); }
+            }
+        }
+        if start > 0 { buf = buf[start..].to_string(); }
+    }
+    // Finalize progress
+    on_progress(99, total);
+    let out = latest_b64.ok_or_else(|| anyhow!("gemini stream: no image data received"))?;
+    on_progress(100, total);
+    Ok(out)
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct OllamaTagsModel {
     name: Option<String>,
@@ -257,6 +358,112 @@ async fn ollama_generate(model: Option<String>, prompt: String) -> Result<String
         if !out.is_empty() { return Ok(out); }
     }
     Err("Unexpected Ollama response format".to_string())
+}
+
+async fn nano_banana_generate_image(storyboard_text: &str) -> Result<String, String> {
+    let state = STARTUP.as_ref().map_err(|e| e.to_string())?.clone();
+    let settings = load_settings_from_dir(&state.data_dir);
+    let base = settings
+        .nano_banana_base_url
+        .ok_or_else(|| "nano-banana base URL not set in settings".to_string())?;
+    let url = format!("{}/generate", base.trim_end_matches('/'));
+    let client = reqwest::Client::new();
+    let mut req = client.post(url).json(&serde_json::json!({
+        "storyboard": storyboard_text,
+    }));
+    if let Some(key) = settings.nano_banana_api_key {
+        req = req.header("X-API-Key", key);
+    }
+    let resp = req.send().await.map_err(|e| format!("nano-banana request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("nano-banana error: HTTP {}", resp.status()));
+    }
+    let value: serde_json::Value = resp.json().await.map_err(|e| format!("nano-banana parse error: {e}"))?;
+    if let Some(s) = value.get("image_base64").and_then(|v| v.as_str()) {
+        return Ok(s.to_string());
+    }
+    if let Some(s) = value.get("image").and_then(|v| v.as_str()) {
+        return Ok(s.to_string());
+    }
+    Err("nano-banana: no image in response".to_string())
+}
+
+async fn ollama_generate_streaming(
+    model: Option<String>,
+    prompt: String,
+    mut on_chunk: impl FnMut(&str),
+) -> Result<(), String> {
+    let state = STARTUP.as_ref().map_err(|e| e.to_string())?.clone();
+    let settings = load_settings_from_dir(&state.data_dir);
+    let base = settings
+        .ollama_base_url
+        .unwrap_or_else(|| "http://127.0.0.1:11434".to_string());
+    let model_name = model
+        .or(settings.default_ollama_model)
+        .unwrap_or_else(|| "gemma3:1b".to_string());
+    let body = OllamaGenerateRequest {
+        model: model_name,
+        prompt,
+        stream: true,
+    };
+    let client = reqwest::Client::new();
+    let url = format!("{}/api/generate", base);
+    let resp = client
+        .post(url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("ollama request failed: {e}"))?;
+
+    if resp.status() == StatusCode::NOT_FOUND || resp.status() == StatusCode::BAD_GATEWAY {
+        return Err("Ollama server not reachable. Is it running on port 11434?".to_string());
+    }
+
+    if !resp.status().is_success() {
+        return Err(format!("ollama error: HTTP {}", resp.status()));
+    }
+
+    // Stream NDJSON lines and accumulate `response` text
+    let mut buf = String::new();
+    let mut stream = resp.bytes_stream();
+    while let Some(item) = stream.next().await {
+        let bytes = item.map_err(|e| format!("stream error: {e}"))?;
+        let chunk = String::from_utf8_lossy(&bytes);
+        buf.push_str(&chunk);
+        // Process complete lines
+        let mut start_idx = 0usize;
+        for (i, ch) in buf.char_indices() {
+            if ch == '\n' {
+                let line = &buf[start_idx..i];
+                if !line.trim().is_empty() {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                        if let Some(s) = json.get("response").and_then(|v| v.as_str()) {
+                            if !s.is_empty() {
+                                on_chunk(s);
+                            }
+                        }
+                    }
+                }
+                start_idx = i + 1;
+            }
+        }
+        // Keep the unfinished tail
+        if start_idx > 0 {
+            buf = buf[start_idx..].to_string();
+        }
+    }
+    // Process any final buffered line
+    let line = buf.trim();
+    if !line.is_empty() {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+            if let Some(s) = json.get("response").and_then(|v| v.as_str()) {
+                if !s.is_empty() {
+                    on_chunk(s);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 type JobId = String;
@@ -647,7 +854,7 @@ async fn create_comic_job(state: tauri::State<'_, AppState>, entry_id: String, s
         }
         let entry_text = entry_body.unwrap_or_default();
 
-        // Step 3: Prompting (call nano-banana via Gemini)
+        // Step 3: Prompting (ask Ollama for storyboard; stream partials)
         status_map.insert(jid.clone(), ComicJobStatus {
             job_id: jid.clone(),
             entry_id: eid.clone(),
@@ -657,13 +864,26 @@ async fn create_comic_job(state: tauri::State<'_, AppState>, entry_id: String, s
             result_image_path: None,
             storyboard_text: None,
         });
-        // First: ask Ollama to write a concise storyboard
         let ollama_prompt = format!(
             "You are a helpful assistant that writes short 4-6 panel comic storyboards from journal entries.\\nJournal Entry:\\n{}\\n\\nOutput format strictly as lines:\\nPanel 1\\nCaption: <short caption>\\nPanel 2\\nCharacter 1: <dialogue>\\n...\\nKeep each caption/dialogue under 12 words.",
             entry_text
         );
-        let storyboard_outline: Result<String, String> = ollama_generate(None, ollama_prompt).await;
-        if let Err(e) = storyboard_outline {
+
+        let mut storyboard_text = String::new();
+        let stream_res = ollama_generate_streaming(None, ollama_prompt, |chunk| {
+            storyboard_text.push_str(chunk);
+            // Update status with partial text
+            status_map.insert(jid.clone(), ComicJobStatus {
+                job_id: jid.clone(),
+                entry_id: eid.clone(),
+                style: st.clone(),
+                stage: ComicStage::Prompting,
+                updated_at: now_iso(),
+                result_image_path: None,
+                storyboard_text: Some(storyboard_text.clone()),
+            });
+        }).await;
+        if let Err(e) = stream_res {
             status_map.insert(jid.clone(), ComicJobStatus {
                 job_id: jid.clone(),
                 entry_id: eid.clone(),
@@ -675,51 +895,93 @@ async fn create_comic_job(state: tauri::State<'_, AppState>, entry_id: String, s
             });
             return;
         }
-        let storyboard_text = storyboard_outline.unwrap_or_default();
 
-        // Step 4: Rendering (simulate 4 panels)
-        let total = 4u32;
-        for completed in 1..=total {
-            status_map.insert(jid.clone(), ComicJobStatus {
-                job_id: jid.clone(),
-                entry_id: eid.clone(),
-                style: st.clone(),
-                stage: ComicStage::Rendering { completed, total },
-                updated_at: now_iso(),
-                result_image_path: None,
-                storyboard_text: Some(storyboard_text.clone()),
-            });
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-        }
+        // Step 4: Rendering (call nano-banana to generate image)
+        status_map.insert(jid.clone(), ComicJobStatus {
+            job_id: jid.clone(),
+            entry_id: eid.clone(),
+            style: st.clone(),
+            stage: ComicStage::Rendering { completed: 1, total: 1 },
+            updated_at: now_iso(),
+            result_image_path: None,
+            storyboard_text: Some(storyboard_text.clone()),
+        });
 
-        // Step 5: Saving
-        // Create tiny placeholder image to simulate output
         let images_dir = data_root.join("images").join(&eid);
         let _ = tokio::fs::create_dir_all(&images_dir).await;
         let img_path = images_dir.join(format!("{}-result.png", &jid));
-        let png_bytes: &[u8] = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDAT\x08\x1d\x63\x60\x60\x60\x00\x00\x00\x05\x00\x01\x0d\n\x2d\xb4\x00\x00\x00\x00IEND\xaeB`\x82";
-        let _ = tokio::fs::write(&img_path, png_bytes).await;
-        status_map.insert(jid.clone(), ComicJobStatus {
-            job_id: jid.clone(),
-            entry_id: eid.clone(),
-            style: st.clone(),
-            stage: ComicStage::Saving,
-            updated_at: now_iso(),
-            result_image_path: Some(img_path.display().to_string()),
-            storyboard_text: Some(storyboard_text.clone()),
-        });
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
 
-        // Done
-        status_map.insert(jid.clone(), ComicJobStatus {
-            job_id: jid.clone(),
-            entry_id: eid.clone(),
-            style: st.clone(),
-            stage: ComicStage::Done,
-            updated_at: now_iso(),
-            result_image_path: Some(img_path.display().to_string()),
-            storyboard_text: Some(storyboard_text.clone()),
-        });
+        let settings = load_settings_from_dir(&data_root);
+        let nb_res = if settings.nano_banana_base_url.is_some() {
+            nano_banana_generate_image(&storyboard_text).await
+        } else {
+            let mut last_tick = 0u32;
+            gemini_generate_image_stream_progress(&storyboard_text, |completed, total| {
+                // Avoid chatty updates; only on meaningful increments
+                if completed > last_tick && completed % 5 == 0 {
+                    last_tick = completed;
+                    status_map.insert(jid.clone(), ComicJobStatus {
+                        job_id: jid.clone(),
+                        entry_id: eid.clone(),
+                        style: st.clone(),
+                        stage: ComicStage::Rendering { completed, total },
+                        updated_at: now_iso(),
+                        result_image_path: None,
+                        storyboard_text: Some(storyboard_text.clone()),
+                    });
+                }
+            }).await.map_err(|e| format!("gemini image failed: {}", e))
+        };
+        match nb_res {
+            Ok(b64_png) => {
+                match decode_base64_png(&b64_png) {
+                    Ok(bytes) => {
+                        let _ = tokio::fs::write(&img_path, bytes).await;
+                        status_map.insert(jid.clone(), ComicJobStatus {
+                            job_id: jid.clone(),
+                            entry_id: eid.clone(),
+                            style: st.clone(),
+                            stage: ComicStage::Saving,
+                            updated_at: now_iso(),
+                            result_image_path: Some(img_path.display().to_string()),
+                            storyboard_text: Some(storyboard_text.clone()),
+                        });
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        status_map.insert(jid.clone(), ComicJobStatus {
+                            job_id: jid.clone(),
+                            entry_id: eid.clone(),
+                            style: st.clone(),
+                            stage: ComicStage::Done,
+                            updated_at: now_iso(),
+                            result_image_path: Some(img_path.display().to_string()),
+                            storyboard_text: Some(storyboard_text.clone()),
+                        });
+                    }
+                    Err(e) => {
+                        status_map.insert(jid.clone(), ComicJobStatus {
+                            job_id: jid.clone(),
+                            entry_id: eid.clone(),
+                            style: st.clone(),
+                            stage: ComicStage::Failed { error: format!("image decode failed: {}", e) },
+                            updated_at: now_iso(),
+                            result_image_path: None,
+                            storyboard_text: Some(storyboard_text.clone()),
+                        });
+                    }
+                }
+            }
+            Err(e) => {
+                status_map.insert(jid.clone(), ComicJobStatus {
+                    job_id: jid.clone(),
+                    entry_id: eid.clone(),
+                    style: st.clone(),
+                    stage: ComicStage::Failed { error: format!("nano-banana failed: {}", e) },
+                    updated_at: now_iso(),
+                    result_image_path: None,
+                    storyboard_text: Some(storyboard_text.clone()),
+                });
+            }
+        }
     });
     state.jobs.insert(job_id.clone(), handle);
     Ok(job_id)
