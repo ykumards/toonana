@@ -50,7 +50,7 @@ export function ComicProgressModal({ open, status, onClose, onCancel }: Props) {
     return words[s.stage] || s.stage;
   }, [status]);
 
-  const isActive = open && !!status;
+  const isActive = open;
   const isDone = status?.stage.stage === "done";
   const isFailed = status?.stage.stage === "failed";
 
@@ -69,7 +69,7 @@ export function ComicProgressModal({ open, status, onClose, onCancel }: Props) {
             role="dialog"
             aria-modal="true"
             className={cn(
-              "relative w-[680px] max-w-[92vw] rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden",
+              "relative w-[680px] max-w-[92vw] max-h-[85vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-2xl",
             )}
             initial={{ y: 24, scale: 0.98, opacity: 0 }}
             animate={{ y: 0, scale: 1, opacity: 1 }}

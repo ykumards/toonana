@@ -95,6 +95,80 @@ pub async fn generate_image_stream_progress(
     settings: &Settings,
     mut on_progress: impl FnMut(u32, u32),
 ) -> Result<String> {
+    // Helper: recursively search for inline image data or data URIs in arbitrary JSON
+    fn find_image_data(v: &serde_json::Value) -> Option<String> {
+        // 1) Direct inline data objects
+        if let Some(obj) = v.as_object() {
+            // inlineData / inline_data forms
+            for key in ["inlineData", "inline_data"] {
+                if let Some(inline) = obj.get(key) {
+                    if let Some(data) = inline.get("data").and_then(|d| d.as_str()) {
+                        if !data.is_empty() {
+                            return Some(data.to_string());
+                        }
+                    }
+                }
+            }
+            // media[].inlineData.data
+            if let Some(media) = obj.get("media").and_then(|m| m.as_array()) {
+                for m in media {
+                    if let Some(inline) = m.get("inlineData").or_else(|| m.get("inline_data")) {
+                        if let Some(data) = inline.get("data").and_then(|d| d.as_str()) {
+                            if !data.is_empty() {
+                                return Some(data.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            // dataUris / data_uris (may contain data: URLs)
+            for key in ["dataUris", "data_uris"] {
+                if let Some(arr) = obj.get(key).and_then(|a| a.as_array()) {
+                    for s in arr {
+                        if let Some(u) = s.as_str() {
+                            if !u.is_empty() {
+                                return Some(u.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            // fileData.fileUri that is already a data URI
+            for key in ["fileData", "file_data"] {
+                if let Some(fd) = obj.get(key) {
+                    if let Some(uri) = fd
+                        .get("fileUri")
+                        .or_else(|| fd.get("file_uri"))
+                        .and_then(|u| u.as_str())
+                    {
+                        if uri.starts_with("data:") {
+                            return Some(uri.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        // Recurse into arrays and objects
+        match v {
+            serde_json::Value::Array(arr) => {
+                for item in arr {
+                    if let Some(s) = find_image_data(item) {
+                        return Some(s);
+                    }
+                }
+                None
+            }
+            serde_json::Value::Object(map) => {
+                for (_k, val) in map.iter() {
+                    if let Some(s) = find_image_data(val) {
+                        return Some(s);
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
     let api_key = settings
         .gemini_api_key
         .clone()
@@ -145,7 +219,6 @@ pub async fn generate_image_stream_progress(
         let bytes = chunk.map_err(|e| anyhow!("gemini stream error: {}", e))?;
         let s = String::from_utf8_lossy(&bytes);
         buf.push_str(&s);
-        
         let mut start = 0usize;
         for (i, ch) in buf.char_indices() {
             if ch == '\n' {
@@ -157,33 +230,8 @@ pub async fn generate_image_stream_progress(
                     }
                     
                     if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
-                        // Try common structures
-                        // 1) top-level candidates[].content.parts[].inlineData.data
-                        if let Some(cands) = json.get("candidates").and_then(|v| v.as_array()) {
-                            for cand in cands {
-                                if let Some(parts) = cand
-                                    .get("content")
-                                    .and_then(|c| c.get("parts"))
-                                    .and_then(|p| p.as_array())
-                                {
-                                    for p in parts {
-                                        if let Some(inline) = p.get("inlineData").or_else(|| p.get("inline_data")) {
-                                            if let Some(data) = inline.get("data").and_then(|d| d.as_str()) {
-                                                latest_b64 = Some(data.to_string());
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        
-                        // 2) sometimes the chunk is simply a part
-                        if latest_b64.is_none() {
-                            if let Some(inline) = json.get("inlineData").or_else(|| json.get("inline_data")) {
-                                if let Some(data) = inline.get("data").and_then(|d| d.as_str()) {
-                                    latest_b64 = Some(data.to_string());
-                                }
-                            }
+                        if let Some(s) = find_image_data(&json) {
+                            latest_b64 = Some(s);
                         }
                     }
                 }
@@ -249,27 +297,80 @@ pub async fn generate_image_once(prompt: &str, settings: &Settings) -> Result<St
     
     let value: serde_json::Value = resp.json().await
         .context("gemini image parse error")?;
-    
-    if let Some(cands) = value.get("candidates").and_then(|v| v.as_array()) {
-        for cand in cands {
-            if let Some(parts) = cand
-                .get("content")
-                .and_then(|c| c.get("parts"))
-                .and_then(|p| p.as_array())
-            {
-                for p in parts {
-                    if let Some(inline) = p.get("inlineData").or_else(|| p.get("inline_data")) {
+
+    // Reuse the same extractor as streaming path
+    fn find_image_data(v: &serde_json::Value) -> Option<String> {
+        if let Some(obj) = v.as_object() {
+            for key in ["inlineData", "inline_data"] {
+                if let Some(inline) = obj.get(key) {
+                    if let Some(data) = inline.get("data").and_then(|d| d.as_str()) {
+                        if !data.is_empty() {
+                            return Some(data.to_string());
+                        }
+                    }
+                }
+            }
+            if let Some(media) = obj.get("media").and_then(|m| m.as_array()) {
+                for m in media {
+                    if let Some(inline) = m.get("inlineData").or_else(|| m.get("inline_data")) {
                         if let Some(data) = inline.get("data").and_then(|d| d.as_str()) {
-                            if !data.is_empty() { 
-                                return Ok(data.to_string()); 
+                            if !data.is_empty() {
+                                return Some(data.to_string());
                             }
                         }
                     }
                 }
             }
+            for key in ["dataUris", "data_uris"] {
+                if let Some(arr) = obj.get(key).and_then(|a| a.as_array()) {
+                    for s in arr {
+                        if let Some(u) = s.as_str() {
+                            if !u.is_empty() {
+                                return Some(u.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            for key in ["fileData", "file_data"] {
+                if let Some(fd) = obj.get(key) {
+                    if let Some(uri) = fd
+                        .get("fileUri")
+                        .or_else(|| fd.get("file_uri"))
+                        .and_then(|u| u.as_str())
+                    {
+                        if uri.starts_with("data:") {
+                            return Some(uri.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        match v {
+            serde_json::Value::Array(arr) => {
+                for item in arr {
+                    if let Some(s) = find_image_data(item) {
+                        return Some(s);
+                    }
+                }
+                None
+            }
+            serde_json::Value::Object(map) => {
+                for (_k, val) in map.iter() {
+                    if let Some(s) = find_image_data(val) {
+                        return Some(s);
+                    }
+                }
+                None
+            }
+            _ => None,
         }
     }
-    
+
+    if let Some(s) = find_image_data(&value) {
+        return Ok(s);
+    }
+
     Err(anyhow!("gemini image: no inline image data in response"))
 }
 

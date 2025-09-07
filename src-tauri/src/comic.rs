@@ -137,7 +137,7 @@ pub async fn create_comic_job(
         });
         
         let ollama_prompt = format!(
-            "You are a helpful assistant that writes short 4-6 panel comic storyboards from journal entries.\nJournal Entry:\n{}\n\nOutput format strictly as lines:\nPanel 1\nCaption: <short caption>\nPanel 2\nCharacter 1: <dialogue>\n...\nKeep each caption/dialogue under 12 words.",
+            "You are a helpful assistant that writes short 4-6 panel comic storyboards from a journal entry.\n\nJournal Entry:\n{}\n\nGuidelines:\n- Keep tone light, hopeful, and not too dark; find a positive spin.\n- Avoid heavy or sensitive content; keep it PG and uplifting.\n- Privacy: do not reveal personal or identifying information from the journal entry; do not quote it verbatim. Replace names, places, dates, or unique details with neutral terms (e.g., 'a friend', 'a cafe', 'today').\n\nReturn ONLY the transcript lines in exactly this format (no titles, explanations, or extra text):\nPanel 1\nCaption: <short caption>\nPanel 2\nCharacter 1: <dialogue>\n...\nKeep each caption/dialogue under 12 words.",
             entry_text
         );
 

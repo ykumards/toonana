@@ -99,6 +99,9 @@ export function SettingsModal({ open, onClose, onSaved }: SettingsModalProps) {
                   placeholder="Paste your Gemini API key"
                   className="w-full px-3 py-2 border border-journal-300 rounded-md bg-white"
                 />
+                <div className="mt-1 text-xs text-text-tertiary">
+                  Used for image generation by default. If Nano‑Banana is configured below, it will be used instead.
+                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -141,6 +144,7 @@ export function SettingsModal({ open, onClose, onSaved }: SettingsModalProps) {
                     placeholder="https://api.nano-banana.local"
                     className="w-full px-3 py-2 border border-journal-300 rounded-md bg-white"
                   />
+                  <div className="mt-1 text-xs text-text-tertiary">Optional. Leave blank to use Gemini for images.</div>
                 </div>
                 <div>
                   <label className="block text-sm font-medium mb-1">Nano-Banana API Key</label>
@@ -151,6 +155,7 @@ export function SettingsModal({ open, onClose, onSaved }: SettingsModalProps) {
                     placeholder="Optional"
                     className="w-full px-3 py-2 border border-journal-300 rounded-md bg-white"
                   />
+                  <div className="mt-1 text-xs text-text-tertiary">Only required if your Nano‑Banana server enforces it.</div>
                 </div>
               </div>
 
@@ -170,6 +175,8 @@ export function SettingsModal({ open, onClose, onSaved }: SettingsModalProps) {
                   <input
                     type="number"
                     step="0.05"
+                    min={0}
+                    max={1}
                     value={settings.ollama_top_p ?? 1}
                     onChange={(e) => setSettings(s => ({ ...s, ollama_top_p: Number(e.target.value) }))}
                     className="w-full px-3 py-2 border border-journal-300 rounded-md bg-white"
