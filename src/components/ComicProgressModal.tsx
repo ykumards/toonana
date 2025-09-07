@@ -144,19 +144,24 @@ export function ComicProgressModal({ open, status, onClose, onCancel }: Props) {
                 </div>
               </div>
 
-              {/* Result image when ready */}
-              {status?.result_image_path ? (
-                <div className="mt-5">
-                  <div className="text-sm font-medium text-slate-700">Preview</div>
-                  <div className="mt-2 overflow-hidden rounded-xl border border-slate-200">
+              {/* Result image or animated placeholder while rendering */}
+              <div className="mt-5">
+                <div className="text-sm font-medium text-slate-700">Preview</div>
+                <div className="mt-2 overflow-hidden rounded-xl border border-slate-200 bg-white min-h-[180px] flex items-center justify-center">
+                  {status?.result_image_path ? (
                     <img
                       src={convertFileSrc(status.result_image_path)}
-                      className="block max-h-[280px] w-full object-contain bg-white"
+                      className="block max-h-[280px] w-full object-contain"
                       alt="Generated comic preview"
                     />
-                  </div>
+                  ) : (
+                    <div className="flex items-center gap-3 text-slate-500">
+                      <div className="h-6 w-6 rounded-full border-2 border-slate-200 border-t-transparent animate-spin" />
+                      <span className="text-sm">Brewing pixels…</span>
+                    </div>
+                  )}
                 </div>
-              ) : null}
+              </div>
 
               {/* Controls */}
               <div className="mt-6 flex items-center justify-end gap-2">
