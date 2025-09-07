@@ -288,7 +288,7 @@ export default function App() {
   });
 
   return (
-    <div className="h-screen w-full bg-slate-50 overflow-hidden">
+    <div className="h-screen w-full overflow-hidden dark bg-background">
       <div className="flex h-full relative">
         {/* Mobile overlay */}
         {sidebarOpen && (
@@ -299,7 +299,7 @@ export default function App() {
         )}
         
         {/* Sidebar */}
-        <div className={`${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} sm:translate-x-0 transition-transform duration-200 w-64 md:w-72 lg:w-80 flex-shrink-0`}>
+        <div className={`${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} sm:translate-x-0 transition-transform duration-200 w-64 md:w-72 lg:w-80 flex-shrink-0 z-20 fixed sm:relative h-full`}>
           <EntriesSidebar
             entries={entries ?? []}
             selectedId={selectedId}
@@ -327,13 +327,13 @@ export default function App() {
 
         {/* Main Editor */}
         <motion.div 
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.3, delay: 0.1 }}
-          className="flex-1 flex flex-col bg-white min-w-0"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.1, ease: [0.4, 0, 0.2, 1] }}
+          className="flex-1 flex flex-col min-w-0 sm:ml-0 bg-background"
         >
           {/* Modern Editor Header */}
-          <div className="border-b border-slate-200 bg-gradient-to-b from-white to-slate-50">
+          <div className="border-b border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/60">
             <div className="px-4 sm:px-6 lg:px-8 py-3 sm:py-4">
               {/* Status and Actions Bar */}
               <div className="flex items-center justify-between">
@@ -354,31 +354,31 @@ export default function App() {
                     className="flex items-center gap-2 text-sm"
                   >
                     {upsert.isPending ? (
-                      <div className="flex items-center gap-2 text-slate-500">
+                      <div className="flex items-center gap-2 text-muted-foreground">
                         <Loader2 className="w-4 h-4 animate-spin" />
-                        <span>Saving...</span>
+                        <span className="text-sm font-medium">Saving...</span>
                       </div>
                     ) : hasUnsavedChanges ? (
-                      <div className="flex items-center gap-2 text-amber-600">
-                        <div className="w-2 h-2 bg-amber-600 rounded-full animate-pulse" />
-                        <span className="font-medium">Unsaved changes</span>
+                      <div className="flex items-center gap-2 text-amber-500">
+                        <div className="w-2 h-2 bg-amber-500 rounded-full animate-pulse" />
+                        <span className="text-sm font-semibold">Unsaved changes</span>
                       </div>
                     ) : selectedId ? (
-                      <div className="flex items-center gap-2 text-green-600">
+                      <div className="flex items-center gap-2 text-emerald-500">
                         <Check className="w-4 h-4" />
-                        <span className="font-medium">All changes saved</span>
+                        <span className="text-sm font-semibold">All changes saved</span>
                       </div>
                     ) : null}
                   </motion.div>
-                  <div className="hidden sm:flex items-center gap-2 text-xs">
+                  <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-secondary/50 rounded-full backdrop-blur-sm border border-border">
                     <span
                       className={
-                        "inline-block h-2 w-2 rounded-full " +
-                        (ollamaHealth?.ok ? "bg-green-500" : "bg-rose-500 animate-pulse")
+                        "inline-block h-2 w-2 rounded-full transition-all duration-300 " +
+                        (ollamaHealth?.ok ? "bg-emerald-400" : "bg-rose-400 animate-pulse")
                       }
                     />
                     <span
-                      className={ollamaHealth?.ok ? "text-green-600" : "text-rose-600"}
+                      className={`text-xs font-medium ${ollamaHealth?.ok ? "text-emerald-400" : "text-rose-400"}`}
                     >
                       {ollamaHealth?.ok ? "Ollama online" : "Ollama offline"}
                     </span>
@@ -392,27 +392,30 @@ export default function App() {
                     variant="secondary"
                     size="sm"
                     title="Avatar"
+                    className="hover:shadow-md transition-all duration-200"
                   >
                     <User className="w-4 h-4" />
-                    <span className="hidden lg:inline">Avatar</span>
+                    <span className="hidden lg:inline font-medium">Avatar</span>
                   </Button>
                   <Button
                     onClick={() => setGalleryOpen(true)}
                     variant="secondary"
                     size="sm"
                     title="Gallery"
+                    className="hover:shadow-md transition-all duration-200"
                   >
                     <CalendarDays className="w-4 h-4" />
-                    <span className="hidden lg:inline">Gallery</span>
+                    <span className="hidden lg:inline font-medium">Gallery</span>
                   </Button>
                   <Button
                     onClick={() => setSettingsOpen(true)}
                     variant="outline"
                     size="sm"
                     title="Settings"
+                    className="hover:shadow-md transition-all duration-200"
                   >
                     <Settings className="w-4 h-4" />
-                    <span className="hidden lg:inline">Settings</span>
+                    <span className="hidden lg:inline font-medium">Settings</span>
                   </Button>
                   
                   <Button
@@ -421,9 +424,10 @@ export default function App() {
                     variant={hasUnsavedChanges ? "primary" : "secondary"}
                     size="sm"
                     title="Save (Cmd/Ctrl + S)"
+                    className={`transition-all duration-200 ${hasUnsavedChanges ? 'shadow-lg hover:shadow-xl hover:scale-105' : 'hover:shadow-md'}`}
                   >
                     <Save className="w-4 h-4" />
-                    <span className="hidden lg:inline">Save</span>
+                    <span className="hidden lg:inline font-semibold">Save</span>
                   </Button>
                   
                   <Button
@@ -431,7 +435,7 @@ export default function App() {
                     disabled={!selectedId}
                     variant="secondary"
                     size="sm"
-                    className="bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white border-0"
+                    className="bg-gradient-to-r from-violet-600 via-purple-600 to-indigo-600 hover:from-violet-700 hover:via-purple-700 hover:to-indigo-700 text-white border-0 shadow-lg hover:shadow-xl transition-all duration-200 hover:scale-105 font-semibold"
                     title="Cartoonify"
                   >
                     <Sparkles className="w-4 h-4" />
@@ -443,7 +447,7 @@ export default function App() {
           </div>
 
           {/* Editor */}
-          <div className="flex-1 px-4 sm:px-6 lg:px-8 py-4 sm:py-6 overflow-auto">
+          <div className="flex-1 px-4 sm:px-6 lg:px-8 py-4 sm:py-6 overflow-auto" style={{ maxWidth: '1200px', margin: '0 auto', width: '100%' }}>
             <MarkdownEditor
               value={body}
               onChange={handleBodyChange}
@@ -464,7 +468,7 @@ Keyboard shortcuts:
 - Cmd/Ctrl + N: New entry
 - Cmd/Ctrl + E: Toggle preview
 - Cmd/Ctrl + K: Focus search"
-              className="h-full"
+              className="h-full drop-shadow-sm"
             />
             {/* The inline status blocks were moved into the progress modal for a cleaner UX */}
           </div>
