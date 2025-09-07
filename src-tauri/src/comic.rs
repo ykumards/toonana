@@ -186,7 +186,53 @@ pub async fn create_comic_job(
         let _ = tokio::fs::create_dir_all(&images_dir).await;
 
         let nb_res = if settings.nano_banana_base_url.is_some() {
-            nano_banana_generate_image(&storyboard_text, &settings).await
+            // While waiting for Nano-Banana, periodically bump progress so the UI stays alive
+            let mut tick_completed: u32 = 0;
+            let req_fut = nano_banana_generate_image(&storyboard_text, &settings);
+            tokio::pin!(req_fut);
+
+            let res = loop {
+                tokio::select! {
+                    r = &mut req_fut => { break r; }
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(800)) => {
+                        // Cap at 98 to leave room for finalize/saving
+                        if tick_completed < 98 {
+                            tick_completed = tick_completed.saturating_add(2).min(98);
+                            status_map.insert(jid.clone(), ComicJobStatus {
+                                job_id: jid.clone(),
+                                entry_id: eid.clone(),
+                                style: st.clone(),
+                                stage: ComicStage::Rendering { completed: tick_completed, total: 100 },
+                                updated_at: now_iso(),
+                                result_image_path: None,
+                                storyboard_text: Some(storyboard_text.clone()),
+                            });
+                        }
+                    }
+                }
+            };
+
+            // Fallback to direct Gemini if Nano-Banana failed
+            match res {
+                Ok(s) => Ok(s),
+                Err(e) => {
+                    let mut last_tick = tick_completed;
+                    generate_image_with_progress(&storyboard_text, &settings, |completed, total| {
+                        if completed > last_tick && completed % 5 == 0 {
+                            last_tick = completed;
+                            status_map.insert(jid.clone(), ComicJobStatus {
+                                job_id: jid.clone(),
+                                entry_id: eid.clone(),
+                                style: st.clone(),
+                                stage: ComicStage::Rendering { completed, total },
+                                updated_at: now_iso(),
+                                result_image_path: None,
+                                storyboard_text: Some(storyboard_text.clone()),
+                            });
+                        }
+                    }).await.map_err(|ge| format!("nano-banana failed: {e}; gemini fallback failed: {ge}"))
+                }
+            }
         } else {
             let mut last_tick = 0u32;
             generate_image_with_progress(&storyboard_text, &settings, |completed, total| {

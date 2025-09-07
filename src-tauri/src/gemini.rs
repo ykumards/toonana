@@ -1,94 +1,10 @@
 use anyhow::{anyhow, Context, Result};
-use serde::{Deserialize, Serialize};
 use futures_util::StreamExt;
+use std::time::Duration;
 
 use crate::settings::Settings;
 
-#[derive(Debug, Serialize, Deserialize)]
-struct GeminiPartsRequestText {
-    text: String,
-}
 
-#[derive(Debug, Serialize, Deserialize)]
-struct GeminiContentRequest {
-    parts: Vec<GeminiPartsRequestText>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct GeminiRequestBody {
-    contents: Vec<GeminiContentRequest>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct GeminiPartText {
-    text: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct GeminiContentResponse {
-    parts: Option<Vec<GeminiPartText>>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct GeminiCandidate {
-    content: Option<GeminiContentResponse>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct GeminiResponseBody {
-    candidates: Option<Vec<GeminiCandidate>>,
-}
-
-pub async fn generate_text(prompt: &str, settings: &Settings) -> Result<String> {
-    let api_key = settings
-        .gemini_api_key
-        .clone()
-        .or_else(|| std::env::var("GEMINI_API_KEY").ok())
-        .context("Gemini API key not set")?;
-    
-    let url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
-    let body = GeminiRequestBody {
-        contents: vec![GeminiContentRequest {
-            parts: vec![GeminiPartsRequestText { 
-                text: prompt.to_string() 
-            }],
-        }],
-    };
-    
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(url)
-        .header("X-goog-api-key", api_key)
-        .json(&body)
-        .send()
-        .await
-        .context("gemini request failed")?;
-    
-    if !resp.status().is_success() {
-        return Err(anyhow!("gemini error: HTTP {}", resp.status()));
-    }
-    
-    let value: GeminiResponseBody = resp.json().await
-        .context("gemini parse error")?;
-    
-    if let Some(cands) = value.candidates {
-        for cand in cands {
-            if let Some(content) = cand.content {
-                if let Some(parts) = content.parts {
-                    for p in parts {
-                        if let Some(t) = p.text {
-                            if !t.is_empty() { 
-                                return Ok(t); 
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
-    Err(anyhow!("gemini: no text in response"))
-}
 
 pub async fn generate_image_stream_progress(
     prompt: &str,
@@ -193,7 +109,10 @@ pub async fn generate_image_stream_progress(
         }
     });
     
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(90))
+        .connect_timeout(Duration::from_secs(10))
+        .build()?;
     let resp = client
         .post(url)
         .header("X-goog-api-key", api_key)
@@ -282,7 +201,10 @@ pub async fn generate_image_once(prompt: &str, settings: &Settings) -> Result<St
         }
     });
     
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .connect_timeout(Duration::from_secs(10))
+        .build()?;
     let resp = client
         .post(url)
         .header("X-goog-api-key", api_key)
@@ -398,7 +320,11 @@ pub async fn nano_banana_generate_image(
         .ok_or_else(|| "nano-banana base URL not set in settings".to_string())?;
     
     let url = format!("{}/generate", base.trim_end_matches('/'));
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .connect_timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("http client error: {e}"))?;
     
     let mut req = client.post(url).json(&serde_json::json!({
         "storyboard": storyboard_text,

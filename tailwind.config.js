@@ -5,6 +5,13 @@ export default {
     "./src/**/*.{js,ts,jsx,tsx}",
   ],
   theme: {
+    screens: {
+      'sm': '640px',
+      'md': '768px',
+      'lg': '1024px',
+      'xl': '1280px',
+      '2xl': '1536px',
+    },
     extend: {
       colors: {
         // Custom color palette inspired by Day One and Bear
@@ -69,11 +76,11 @@ export default {
         ],
       },
       fontSize: {
-        'journal-title': ['2.25rem', { lineHeight: '2.5rem', fontWeight: '700' }],
-        'journal-heading': ['1.875rem', { lineHeight: '2.25rem', fontWeight: '600' }],
-        'journal-subheading': ['1.5rem', { lineHeight: '2rem', fontWeight: '600' }],
-        'journal-body': ['1rem', { lineHeight: '1.6', fontWeight: '400' }],
-        'journal-small': ['0.875rem', { lineHeight: '1.25rem', fontWeight: '400' }],
+        'journal-title': ['clamp(1.75rem, 4vw, 2.25rem)', { lineHeight: '1.2', fontWeight: '700' }],
+        'journal-heading': ['clamp(1.5rem, 3.5vw, 1.875rem)', { lineHeight: '1.3', fontWeight: '600' }],
+        'journal-subheading': ['clamp(1.25rem, 3vw, 1.5rem)', { lineHeight: '1.4', fontWeight: '600' }],
+        'journal-body': ['clamp(0.875rem, 2vw, 1rem)', { lineHeight: '1.6', fontWeight: '400' }],
+        'journal-small': ['clamp(0.75rem, 1.5vw, 0.875rem)', { lineHeight: '1.25rem', fontWeight: '400' }],
       },
       spacing: {
         'journal': '1.5rem',

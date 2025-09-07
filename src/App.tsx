@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
-import { Save, Sparkles, Settings, Check, Loader2 } from "lucide-react";
+import { Save, Sparkles, Settings, Check, Loader2, Menu, X } from "lucide-react";
 import { EntriesSidebar } from "./components/EntriesSidebar";
 import { MarkdownEditor } from "./components/MarkdownEditor";
 import { SettingsModal } from "./components/SettingsModal";
@@ -22,7 +22,6 @@ type Entry = {
   id: string;
   created_at: string;
   updated_at: string;
-  title: string;
   body_cipher: number[];
   mood?: string | null;
   tags?: unknown | null;
@@ -30,7 +29,6 @@ type Entry = {
 
 type EntryUpsert = {
   id?: string;
-  title: string;
   body_cipher: number[];
   mood?: string | null;
   tags?: unknown | null;
@@ -40,7 +38,7 @@ type EntryListItem = {
   id: string;
   created_at: string;
   updated_at: string;
-  title: string;
+  body_preview?: string | null;
   mood?: string | null;
   tags?: unknown | null;
 };
@@ -98,7 +96,6 @@ export default function App() {
   const qc = useQueryClient();
   const { data: entries, isLoading } = useEntries();
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [editorMode, setEditorMode] = useState<"edit" | "preview">("edit");
@@ -109,11 +106,12 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [progressOpen, setProgressOpen] = useState(false);
   const [ollamaHealth, setOllamaHealth] = useState<OllamaHealth | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const upsert = useMutation({
     mutationFn: async () => {
       const body_cipher = await encrypt(body);
-      const payload: EntryUpsert = { id: selectedId ?? undefined, title, body_cipher };
+      const payload: EntryUpsert = { id: selectedId ?? undefined, body_cipher };
       return invoke<Entry>("db_upsert_entry", { entry: payload });
     },
     onSuccess: async (e) => {
@@ -131,7 +129,6 @@ export default function App() {
 
     const e = await invoke<Entry>("db_get_entry", { id });
     setSelectedId(e.id);
-    setTitle(e.title);
     try {
       const text = await decrypt(e.body_cipher);
       setBody(text);
@@ -148,7 +145,6 @@ export default function App() {
     }
 
     setSelectedId(null);
-    setTitle("");
     setBody("");
     setHasUnsavedChanges(false);
   };
@@ -233,11 +229,6 @@ export default function App() {
   
 
   // Track changes
-  const handleTitleChange = (newTitle: string) => {
-    setTitle(newTitle);
-    setHasUnsavedChanges(true);
-  };
-
   const handleBodyChange = (newBody: string) => {
     setBody(newBody);
     setHasUnsavedChanges(true);
@@ -268,39 +259,56 @@ export default function App() {
 
   return (
     <div className="h-screen w-full bg-slate-50 overflow-hidden">
-      <div className="flex h-full">
+      <div className="flex h-full relative">
+        {/* Mobile overlay */}
+        {sidebarOpen && (
+          <div
+            className="fixed inset-0 bg-black/50 z-10 sm:hidden"
+            onClick={() => setSidebarOpen(false)}
+          />
+        )}
+        
         {/* Sidebar */}
-        <EntriesSidebar
-          entries={entries ?? []}
-          selectedId={selectedId}
-          isLoading={isLoading}
-          onEntrySelect={loadEntry}
-          onNewEntry={startNew}
-          searchInputRef={searchInputRef}
-        />
+        <div className={`${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} sm:translate-x-0 transition-transform duration-200`}>
+          <EntriesSidebar
+            entries={entries ?? []}
+            selectedId={selectedId}
+            isLoading={isLoading}
+            onEntrySelect={(id) => {
+              loadEntry(id);
+              setSidebarOpen(false);
+            }}
+            onNewEntry={() => {
+              startNew();
+              setSidebarOpen(false);
+            }}
+            searchInputRef={searchInputRef}
+          />
+        </div>
 
         {/* Main Editor */}
         <motion.div 
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ duration: 0.3, delay: 0.1 }}
-          className="flex-1 flex flex-col bg-white"
+          className="flex-1 flex flex-col bg-white min-w-0"
         >
           {/* Modern Editor Header */}
           <div className="border-b border-slate-200 bg-gradient-to-b from-white to-slate-50">
-            <div className="px-8 py-6">
-              <input
-                value={title}
-                onChange={(e) => handleTitleChange(e.target.value)}
-                onBlur={handleSave}
-                placeholder="Entry title..."
-                className="w-full text-3xl font-bold text-slate-900 bg-transparent border-none outline-none placeholder:text-slate-400 focus:placeholder:text-slate-500 transition-colors duration-150"
-              />
-              
+            <div className="px-4 sm:px-6 lg:px-8 py-3 sm:py-4">
               {/* Status and Actions Bar */}
-              <div className="flex items-center justify-between mt-4">
+              <div className="flex items-center justify-between">
+                {/* Mobile menu button */}
+                <Button
+                  onClick={() => setSidebarOpen(!sidebarOpen)}
+                  variant="ghost"
+                  size="icon"
+                  className="sm:hidden mr-2"
+                >
+                  {sidebarOpen ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
+                </Button>
                 {/* Save Status + Ollama indicator */}
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2 sm:gap-4">
                   <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
@@ -323,7 +331,7 @@ export default function App() {
                       </div>
                     ) : null}
                   </motion.div>
-                  <div className="flex items-center gap-2 text-xs">
+                  <div className="hidden sm:flex items-center gap-2 text-xs">
                     <span
                       className={
                         "inline-block h-2 w-2 rounded-full " +
@@ -339,14 +347,15 @@ export default function App() {
                 </div>
 
                 {/* Action Buttons */}
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1 sm:gap-2">
                   <Button
                     onClick={() => setSettingsOpen(true)}
                     variant="outline"
                     size="sm"
+                    title="Settings"
                   >
                     <Settings className="w-4 h-4" />
-                    Settings
+                    <span className="hidden sm:inline">Settings</span>
                   </Button>
                   
                   <Button
@@ -354,9 +363,10 @@ export default function App() {
                     disabled={!hasUnsavedChanges || upsert.isPending}
                     variant={hasUnsavedChanges ? "primary" : "secondary"}
                     size="sm"
+                    title="Save (Cmd/Ctrl + S)"
                   >
                     <Save className="w-4 h-4" />
-                    Save
+                    <span className="hidden sm:inline">Save</span>
                   </Button>
                   
                   <Button
@@ -365,9 +375,10 @@ export default function App() {
                     variant="secondary"
                     size="sm"
                     className="bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white border-0"
+                    title="Generate Comic"
                   >
                     <Sparkles className="w-4 h-4" />
-                    Make Comic
+                    <span className="hidden lg:inline">Make Comic</span>
                   </Button>
                 </div>
               </div>
@@ -375,7 +386,7 @@ export default function App() {
           </div>
 
           {/* Editor */}
-          <div className="flex-1 px-8 py-6 overflow-auto">
+          <div className="flex-1 px-4 sm:px-6 lg:px-8 py-4 sm:py-6 overflow-auto">
             <MarkdownEditor
               value={body}
               onChange={handleBodyChange}

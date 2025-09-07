@@ -8,7 +8,6 @@ use time::OffsetDateTime;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EntryUpsert {
     pub id: Option<String>,
-    pub title: String,
     pub body_cipher: Vec<u8>,
     pub mood: Option<String>,
     pub tags: Option<serde_json::Value>,
@@ -19,7 +18,6 @@ pub struct Entry {
     pub id: String,
     pub created_at: String,
     pub updated_at: String,
-    pub title: String,
     pub body_cipher: Vec<u8>,
     pub mood: Option<String>,
     pub tags: Option<serde_json::Value>,
@@ -31,7 +29,7 @@ pub struct EntryListItem {
     pub id: String,
     pub created_at: String,
     pub updated_at: String,
-    pub title: String,
+    pub body_preview: Option<String>,
     pub mood: Option<String>,
     pub tags: Option<serde_json::Value>,
 }
@@ -49,23 +47,72 @@ pub fn now_iso() -> String {
 }
 
 pub async fn init_db(pool: &Pool<Sqlite>) -> Result<()> {
-    // Minimal schema per spec
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS entries (
-            id TEXT PRIMARY KEY,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            title TEXT NOT NULL,
-            body_cipher BLOB NOT NULL,
-            mood TEXT,
-            tags TEXT,
-            embedding BLOB
-        );
-        "#,
-    )
-    .execute(pool)
-    .await?;
+    // First, check if we need to migrate from the old schema with title
+    let table_info = sqlx::query("PRAGMA table_info(entries)")
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+    
+    let has_title_column = table_info.iter().any(|row| {
+        row.try_get::<String, _>("name")
+            .map(|n| n == "title")
+            .unwrap_or(false)
+    });
+    
+    if has_title_column {
+        // Need to migrate: create new table without title column
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS entries_new (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                body_cipher BLOB NOT NULL,
+                mood TEXT,
+                tags TEXT,
+                embedding BLOB
+            );
+            "#,
+        )
+        .execute(pool)
+        .await?;
+        
+        // Copy data from old table (excluding title)
+        sqlx::query(
+            r#"
+            INSERT INTO entries_new (id, created_at, updated_at, body_cipher, mood, tags, embedding)
+            SELECT id, created_at, updated_at, body_cipher, mood, tags, embedding FROM entries
+            "#,
+        )
+        .execute(pool)
+        .await?;
+        
+        // Drop old table and rename new one
+        sqlx::query("DROP TABLE entries")
+            .execute(pool)
+            .await?;
+        
+        sqlx::query("ALTER TABLE entries_new RENAME TO entries")
+            .execute(pool)
+            .await?;
+    } else {
+        // Create table with new schema (no title)
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS entries (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                body_cipher BLOB NOT NULL,
+                mood TEXT,
+                tags TEXT,
+                embedding BLOB
+            );
+            "#,
+        )
+        .execute(pool)
+        .await?;
+    }
 
     sqlx::query(
         r#"
@@ -137,11 +184,10 @@ pub async fn upsert_entry(pool: &Pool<Sqlite>, entry: EntryUpsert) -> Result<Ent
 
     let _ = sqlx::query(
         r#"
-        INSERT INTO entries (id, created_at, updated_at, title, body_cipher, mood, tags, embedding)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)
+        INSERT INTO entries (id, created_at, updated_at, body_cipher, mood, tags, embedding)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)
         ON CONFLICT(id) DO UPDATE SET
           updated_at=excluded.updated_at,
-          title=excluded.title,
           body_cipher=excluded.body_cipher,
           mood=excluded.mood,
           tags=excluded.tags
@@ -150,7 +196,6 @@ pub async fn upsert_entry(pool: &Pool<Sqlite>, entry: EntryUpsert) -> Result<Ent
     .bind(&id)
     .bind(&now)
     .bind(&now)
-    .bind(&entry.title)
     .bind(&entry.body_cipher)
     .bind(&entry.mood)
     .bind(&tags_json)
@@ -163,7 +208,7 @@ pub async fn upsert_entry(pool: &Pool<Sqlite>, entry: EntryUpsert) -> Result<Ent
 
 pub async fn get_entry(pool: &Pool<Sqlite>, id: String) -> Result<Entry, String> {
     let row = sqlx::query(
-        r#"SELECT id, created_at, updated_at, title, body_cipher, mood, tags, embedding FROM entries WHERE id = ?1"#
+        r#"SELECT id, created_at, updated_at, body_cipher, mood, tags, embedding FROM entries WHERE id = ?1"#
     )
     .bind(&id)
     .fetch_one(pool)
@@ -179,7 +224,6 @@ pub async fn get_entry(pool: &Pool<Sqlite>, id: String) -> Result<Entry, String>
         id: row.try_get("id").map_err(|e| e.to_string())?,
         created_at: row.try_get("created_at").map_err(|e| e.to_string())?,
         updated_at: row.try_get("updated_at").map_err(|e| e.to_string())?,
-        title: row.try_get("title").map_err(|e| e.to_string())?,
         body_cipher: row.try_get("body_cipher").map_err(|e| e.to_string())?,
         mood: row.try_get("mood").map_err(|e| e.to_string())?,
         tags: tags_val,
@@ -192,7 +236,7 @@ pub async fn list_entries(pool: &Pool<Sqlite>, params: Option<ListParams>) -> Re
     let offset = params.as_ref().and_then(|p| p.offset).unwrap_or(0);
     
     let rows = sqlx::query(
-        r#"SELECT id, created_at, updated_at, title, mood, tags FROM entries ORDER BY created_at DESC LIMIT ?1 OFFSET ?2"#
+        r#"SELECT id, created_at, updated_at, body_cipher, mood, tags FROM entries ORDER BY created_at DESC LIMIT ?1 OFFSET ?2"#
     )
     .bind(limit)
     .bind(offset)
@@ -208,11 +252,27 @@ pub async fn list_entries(pool: &Pool<Sqlite>, params: Option<ListParams>) -> Re
                 .as_deref()
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
             
+            // Get body preview - first 50 chars of decrypted body
+            let body_preview = if let Ok(cipher) = row.try_get::<Vec<u8>, _>("body_cipher") {
+                String::from_utf8(cipher)
+                    .ok()
+                    .map(|text| {
+                        let preview = text.chars().take(50).collect::<String>();
+                        if text.len() > 50 {
+                            format!("{}...", preview.trim())
+                        } else {
+                            preview.trim().to_string()
+                        }
+                    })
+            } else {
+                None
+            };
+            
             EntryListItem {
                 id: row.try_get("id").unwrap_or_default(),
                 created_at: row.try_get("created_at").unwrap_or_default(),
                 updated_at: row.try_get("updated_at").unwrap_or_default(),
-                title: row.try_get("title").unwrap_or_default(),
+                body_preview,
                 mood: row.try_get("mood").ok(),
                 tags: tags_val,
             }

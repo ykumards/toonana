@@ -10,7 +10,7 @@ type EntryListItem = {
   id: string;
   created_at: string;
   updated_at: string;
-  title: string;
+  body_preview?: string | null;
   mood?: string | null;
   tags?: unknown | null;
 };
@@ -39,7 +39,7 @@ export function EntriesSidebar({
     
     const query = searchQuery.toLowerCase();
     return entries.filter(entry => 
-      entry.title.toLowerCase().includes(query)
+      (entry.body_preview || "").toLowerCase().includes(query)
     );
   }, [entries, searchQuery]);
 
@@ -114,18 +114,18 @@ export function EntriesSidebar({
       initial={{ x: -20, opacity: 0 }}
       animate={{ x: 0, opacity: 1 }}
       transition={{ duration: 0.3 }}
-      className="w-80 bg-gradient-to-b from-slate-50 to-slate-100 border-r border-slate-200 flex flex-col h-full"
+      className="w-full sm:w-72 lg:w-80 bg-gradient-to-b from-slate-50 to-slate-100 border-r border-slate-200 flex flex-col h-full absolute sm:relative z-20 sm:z-auto"
     >
       {/* Modern Header */}
-      <div className="p-4 border-b border-slate-200 bg-white/80 backdrop-blur-sm">
+      <div className="p-3 sm:p-4 border-b border-slate-200 bg-white/80 backdrop-blur-sm">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
-            <div className="p-2 bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg text-white shadow-lg">
-              <BookOpen size={20} />
+            <div className="p-1.5 sm:p-2 bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg text-white shadow-lg">
+              <BookOpen className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-slate-900">Journal</h1>
-              <p className="text-xs text-slate-500">{entries?.length || 0} entries</p>
+              <h1 className="text-base sm:text-lg font-bold text-slate-900">Journal</h1>
+              <p className="text-xs text-slate-500 hidden sm:block">{entries?.length || 0} entries</p>
             </div>
           </div>
           <Button
@@ -148,14 +148,14 @@ export function EntriesSidebar({
             placeholder="Search entries... (⌘K)"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+            className="w-full pl-9 sm:pl-10 pr-3 py-1.5 sm:py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs sm:text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
           />
         </div>
       </div>
 
       {/* Entries List with ScrollArea */}
       <ScrollArea className="flex-1">
-        <div className="p-4">
+        <div className="p-3 sm:p-4">
           {isLoading ? (
             <motion.div 
               initial={{ opacity: 0 }}
@@ -233,7 +233,7 @@ export function EntriesSidebar({
                         whileTap={{ scale: 0.98 }}
                         onClick={() => onEntrySelect(entry.id)}
                         className={cn(
-                          "relative p-3 rounded-lg cursor-pointer transition-all",
+                          "relative p-2 sm:p-3 rounded-lg cursor-pointer transition-all",
                           "hover:shadow-md hover:bg-white",
                           entry.id === selectedId
                             ? "bg-gradient-to-r from-blue-50 to-blue-100 border border-blue-200 shadow-md"
@@ -248,15 +248,15 @@ export function EntriesSidebar({
                         )}
                         <div className="flex items-start justify-between">
                           <div className="flex-1 min-w-0">
-                            <h3 className={cn(
-                              "font-medium truncate",
-                              entry.id === selectedId ? "text-blue-900" : "text-slate-900"
-                            )}>
-                              {entry.title || "Untitled"}
-                            </h3>
-                            <p className="text-xs text-slate-500 mt-1">
-                              <Clock size={10} className="inline mr-1" />
+                            <p className="text-xs text-slate-500 mb-1">
+                              <Clock className="inline mr-1 w-2.5 h-2.5" />
                               {formatEntryDate(entry.created_at)}
+                            </p>
+                            <p className={cn(
+                              "text-xs sm:text-sm truncate",
+                              entry.id === selectedId ? "text-blue-900" : "text-slate-700"
+                            )}>
+                              {entry.body_preview || "Empty entry"}
                             </p>
                           </div>
                           {getMoodEmoji(entry.mood) && (

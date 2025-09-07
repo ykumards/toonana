@@ -122,7 +122,7 @@ export function MarkdownEditor({
   return (
     <div className={cn("flex flex-col h-full bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm", className)}>
       {/* Modern Mode Toggle */}
-      <div className="flex items-center justify-between px-6 py-3 border-b border-slate-200 bg-gradient-to-b from-slate-50 to-white">
+      <div className="flex items-center justify-between px-3 sm:px-6 py-2 sm:py-3 border-b border-slate-200 bg-gradient-to-b from-slate-50 to-white">
         <div className="relative flex bg-slate-100 rounded-lg p-1">
           <div
             className={cn(
@@ -133,7 +133,7 @@ export function MarkdownEditor({
           <button
             onClick={() => setMode("edit")}
             className={cn(
-              "relative z-10 flex items-center gap-2 px-3 py-1.5 text-sm font-medium transition-colors duration-200",
+              "relative z-10 flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 text-xs sm:text-sm font-medium transition-colors duration-200",
               mode === "edit" ? "text-slate-900" : "text-slate-500 hover:text-slate-700"
             )}
           >
@@ -143,7 +143,7 @@ export function MarkdownEditor({
           <button
             onClick={() => setMode("preview")}
             className={cn(
-              "relative z-10 flex items-center gap-2 px-3 py-1.5 text-sm font-medium transition-colors duration-200",
+              "relative z-10 flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 text-xs sm:text-sm font-medium transition-colors duration-200",
               mode === "preview" ? "text-slate-900" : "text-slate-500 hover:text-slate-700"
             )}
           >
@@ -172,7 +172,7 @@ export function MarkdownEditor({
                 onBlur={() => setFocused(false)}
                 placeholder={placeholder}
                 className={cn(
-                  "flex-1 p-6 font-sans text-base leading-relaxed text-slate-900 bg-transparent resize-none overflow-y-auto",
+                  "flex-1 p-3 sm:p-4 lg:p-6 font-sans text-sm sm:text-base leading-relaxed text-slate-900 bg-transparent resize-none overflow-y-auto",
                   "placeholder:text-slate-400 placeholder:leading-relaxed",
                   "focus:outline-none focus:bg-gradient-to-b focus:from-blue-50/50 focus:to-transparent",
                   "transition-colors duration-200"
@@ -187,7 +187,7 @@ export function MarkdownEditor({
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 10 }}
               transition={{ duration: 0.15 }}
-              className="flex-1 p-6 overflow-y-auto"
+              className="flex-1 p-3 sm:p-4 lg:p-6 overflow-y-auto"
             >
               {value.trim() ? (
                 <div className="prose prose-slate prose-lg max-w-none">
