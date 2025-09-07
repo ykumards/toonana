@@ -1,10 +1,12 @@
 import { useEffect, useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { Save, Sparkles } from "lucide-react";
+import { Settings } from "lucide-react";
 import clsx from "clsx";
 import { EntriesSidebar } from "./components/EntriesSidebar";
 import { MarkdownEditor } from "./components/MarkdownEditor";
+import { SettingsModal } from "./components/SettingsModal";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useAutosave } from "./hooks/useAutosave";
 import "./App.css";
@@ -34,6 +36,26 @@ type EntryListItem = {
   title: string;
   mood?: string | null;
   tags?: unknown | null;
+};
+
+type ComicStage =
+  | { stage: "queued" }
+  | { stage: "parsing" }
+  | { stage: "storyboarding" }
+  | { stage: "prompting" }
+  | { stage: "rendering"; completed: number; total: number }
+  | { stage: "saving" }
+  | { stage: "done" }
+  | { stage: "failed"; error: string };
+
+type ComicJobStatus = {
+  job_id: string;
+  entry_id: string;
+  style: string;
+  stage: ComicStage;
+  updated_at: string;
+  result_image_path?: string | null;
+  storyboard_text?: string | null;
 };
 
 function useInit() {
@@ -74,6 +96,10 @@ export default function App() {
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [editorMode, setEditorMode] = useState<"edit" | "preview">("edit");
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const [comicJobId, setComicJobId] = useState<string | null>(null);
+  const [comicStatus, setComicStatus] = useState<ComicJobStatus | null>(null);
+  const [isPolling, setIsPolling] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const upsert = useMutation({
     mutationFn: async () => {
@@ -120,9 +146,36 @@ export default function App() {
 
   const makeComic = async () => {
     if (!selectedId) return;
-    await invoke<string>("create_comic_job", { entryId: selectedId, style: "nano-banana" });
-    // Minimal stub; later show progress
+    const job = await invoke<string>("create_comic_job", { entry_id: selectedId, style: "nano-banana" });
+    setComicJobId(job);
+    setIsPolling(true);
   };
+
+  useEffect(() => {
+    if (!comicJobId || !isPolling) return;
+    let stopped = false;
+    const poll = async () => {
+      try {
+        const status = await invoke<ComicJobStatus>("get_comic_job_status", { job_id: comicJobId });
+        if (stopped) return;
+        setComicStatus(status);
+        const stage = status.stage as ComicStage;
+        if (stage.stage === "done" || stage.stage === "failed") {
+          setIsPolling(false);
+          return;
+        }
+      } catch (e) {
+        // stop polling on error
+        setIsPolling(false);
+        return;
+      }
+      setTimeout(poll, 400);
+    };
+    poll();
+    return () => { stopped = true; };
+  }, [comicJobId, isPolling]);
+
+  
 
   // Track changes
   const handleTitleChange = (newTitle: string) => {
@@ -203,6 +256,13 @@ export default function App() {
               {/* Action Buttons */}
               <div className="flex gap-2">
                 <button
+                  onClick={() => setSettingsOpen(true)}
+                  className="flex items-center gap-2 px-3 py-2 border rounded-md text-sm font-medium transition-all duration-150 focus-ring bg-journal-50 text-text-primary border-journal-200 hover:bg-journal-100 hover:border-journal-300"
+                >
+                  <Settings size={16} />
+                  Settings
+                </button>
+                <button
                   onClick={handleSave}
                   disabled={!hasUnsavedChanges || upsert.isPending}
                   className={clsx(
@@ -252,9 +312,45 @@ Keyboard shortcuts:
 - Cmd/Ctrl + K: Focus search"
               className="h-full"
             />
+            {comicStatus ? (
+              <div className="mt-3 text-sm text-text-tertiary">
+                {(() => {
+                  const s = comicStatus.stage as ComicStage;
+                  if (s.stage === "rendering") {
+                    return `Rendering panels ${s.completed}/${s.total}...`;
+                  }
+                  if (s.stage === "failed") {
+                    return `Failed: ${s.error}`;
+                  }
+                  if (s.stage === "done") {
+                    return "Comic ready.";
+                  }
+                  return `Stage: ${s.stage}`;
+                })()}
+              </div>
+            ) : null}
+
+            {comicStatus?.storyboard_text ? (
+              <div className="mt-3 p-3 border border-journal-200 rounded-md bg-journal-50">
+                <div className="text-sm font-medium mb-1 text-text-primary">Storyboard</div>
+                <pre className="whitespace-pre-wrap text-sm text-text-secondary">{comicStatus.storyboard_text}</pre>
+              </div>
+            ) : null}
+
+            {comicStatus?.result_image_path ? (
+              <div className="mt-3">
+                <div className="text-sm font-medium mb-1 text-text-primary">Generated Image</div>
+                <img
+                  src={convertFileSrc(comicStatus.result_image_path)}
+                  alt="Generated comic"
+                  className="max-w-full rounded-md border border-journal-200"
+                />
+              </div>
+            ) : null}
           </div>
         </div>
       </div>
+      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );
 }

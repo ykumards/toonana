@@ -1,22 +1,22 @@
-use aes_gcm::aead::{Aead, KeyInit};
-use aes_gcm::{Aes256Gcm, Nonce};
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use dashmap::DashMap;
 use directories::ProjectDirs;
 use once_cell::sync::Lazy;
-use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sqlx::{sqlite::{SqlitePoolOptions, SqliteConnectOptions}, Pool, Sqlite, Row};
-use std::str::FromStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use time::OffsetDateTime;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
+use reqwest::StatusCode;
 
+// kept for potential future re-enable of encryption
+#[allow(dead_code)]
 static SERVICE_NAME: &str = "toonana";
+#[allow(dead_code)]
 static VAULT_KEY_LABEL: &str = "vault-key-v1";
 
 #[derive(Clone)]
@@ -24,6 +24,7 @@ struct AppState {
     db: Pool<Sqlite>,
     data_dir: PathBuf,
     jobs: Arc<DashMap<String, JoinHandle<()>>>,
+    comic_status: Arc<DashMap<String, ComicJobStatus>>, // job_id -> status
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -32,6 +33,15 @@ struct AppHealth {
     data_dir: String,
     db_path: String,
     has_vault_key: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct Settings {
+    gemini_api_key: Option<String>,
+    ollama_base_url: Option<String>,
+    default_ollama_model: Option<String>,
+    ollama_temperature: Option<f32>,
+    ollama_top_p: Option<f32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -78,7 +88,202 @@ struct ExportPanel {
     dialogue_cipher: Option<Vec<u8>>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct OllamaGenerateRequest {
+    model: String,
+    prompt: String,
+    stream: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct OllamaGenerateResponse {
+    response: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GeminiPartsRequestText {
+    text: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GeminiContentRequest {
+    parts: Vec<GeminiPartsRequestText>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GeminiRequestBody {
+    contents: Vec<GeminiContentRequest>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GeminiPartText {
+    text: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GeminiContentResponse {
+    parts: Option<Vec<GeminiPartText>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GeminiCandidate {
+    content: Option<GeminiContentResponse>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GeminiResponseBody {
+    candidates: Option<Vec<GeminiCandidate>>,
+}
+
+async fn gemini_generate(prompt: &str) -> Result<String> {
+    let state_ref = STARTUP.as_ref().map_err(|_| anyhow!("startup not ready"))?;
+    let settings = load_settings_from_dir(&state_ref.data_dir);
+    let api_key = settings
+        .gemini_api_key
+        .or_else(|| std::env::var("GEMINI_API_KEY").ok())
+        .context("Gemini API key not set")?;
+    let url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
+    let body = GeminiRequestBody {
+        contents: vec![GeminiContentRequest {
+            parts: vec![GeminiPartsRequestText { text: prompt.to_string() }],
+        }],
+    };
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(url)
+        .header("X-goog-api-key", api_key)
+        .json(&body)
+        .send()
+        .await
+        .context("gemini request failed")?;
+    if !resp.status().is_success() {
+        return Err(anyhow!("gemini error: HTTP {}", resp.status()));
+    }
+    let value: GeminiResponseBody = resp.json().await.context("gemini parse error")?;
+    if let Some(cands) = value.candidates {
+        for cand in cands {
+            if let Some(content) = cand.content {
+                if let Some(parts) = content.parts {
+                    for p in parts {
+                        if let Some(t) = p.text {
+                            if !t.is_empty() { return Ok(t); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Err(anyhow!("gemini: no text in response"))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct OllamaTagsModel {
+    name: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct OllamaTagsResponse {
+    models: Option<Vec<OllamaTagsModel>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct OllamaHealth {
+    ok: bool,
+    message: Option<String>,
+    models: Option<Vec<String>>,
+}
+
+#[tauri::command]
+async fn ollama_health(state: tauri::State<'_, AppState>) -> Result<OllamaHealth, String> {
+    let settings = load_settings_from_dir(&state.data_dir);
+    let base = settings.ollama_base_url.unwrap_or_else(|| "http://127.0.0.1:11434".to_string());
+    let client = reqwest::Client::new();
+    let url = format!("{}/api/tags", base);
+    let resp = client.get(url).send().await;
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let tags: OllamaTagsResponse = r.json().await.map_err(|e| e.to_string())?;
+            let models = tags.models.unwrap_or_default().into_iter().filter_map(|m| m.name).collect::<Vec<_>>();
+            Ok(OllamaHealth { ok: true, message: None, models: Some(models) })
+        }
+        Ok(r) => Ok(OllamaHealth { ok: false, message: Some(format!("HTTP {}", r.status())), models: None }),
+        Err(e) => Ok(OllamaHealth { ok: false, message: Some(e.to_string()), models: None }),
+    }
+}
+
+#[tauri::command]
+async fn ollama_list_models(state: tauri::State<'_, AppState>) -> Result<Vec<String>, String> {
+    let health = ollama_health(state).await?;
+    Ok(health.models.unwrap_or_default())
+}
+
+#[tauri::command]
+async fn ollama_generate(model: Option<String>, prompt: String) -> Result<String, String> {
+    let state = STARTUP.as_ref().map_err(|e| e.to_string())?.clone();
+    let settings = load_settings_from_dir(&state.data_dir);
+    let base = settings.ollama_base_url.unwrap_or_else(|| "http://127.0.0.1:11434".to_string());
+    let model_name = model.or(settings.default_ollama_model).unwrap_or_else(|| "gemma3:1b".to_string());
+    let body = OllamaGenerateRequest { model: model_name, prompt, stream: false };
+    let client = reqwest::Client::new();
+    let url = format!("{}/api/generate", base);
+    let resp = client
+        .post(url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("ollama request failed: {e}"))?;
+
+    if resp.status() == StatusCode::NOT_FOUND || resp.status() == StatusCode::BAD_GATEWAY {
+        return Err("Ollama server not reachable. Is it running on port 11434?".to_string());
+    }
+
+    if !resp.status().is_success() {
+        return Err(format!("ollama error: HTTP {}", resp.status()));
+    }
+
+    // When stream=false, Ollama returns a single JSON object with `response`
+    let value: serde_json::Value = resp.json().await.map_err(|e| format!("response parse error: {e}"))?;
+    if let Some(s) = value.get("response").and_then(|v| v.as_str()) {
+        return Ok(s.to_string());
+    }
+    // Some servers may return multiple JSON lines even if stream=false; handle array of chunks
+    if let Some(arr) = value.as_array() {
+        let mut out = String::new();
+        for v in arr {
+            if let Some(s) = v.get("response").and_then(|x| x.as_str()) {
+                out.push_str(s);
+            }
+        }
+        if !out.is_empty() { return Ok(out); }
+    }
+    Err("Unexpected Ollama response format".to_string())
+}
+
 type JobId = String;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "stage", rename_all = "snake_case")]
+enum ComicStage {
+    Queued,
+    Parsing,
+    Storyboarding,
+    Prompting,
+    Rendering { completed: u32, total: u32 },
+    Saving,
+    Done,
+    Failed { error: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ComicJobStatus {
+    job_id: String,
+    entry_id: String,
+    style: String,
+    stage: ComicStage,
+    updated_at: String,
+    result_image_path: Option<String>,
+    storyboard_text: Option<String>,
+}
 
 fn now_iso() -> String {
     OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_default()
@@ -97,6 +302,27 @@ fn ensure_data_dir() -> Result<PathBuf> {
 
 fn db_path(data_dir: &Path) -> PathBuf {
     data_dir.join("app.sqlite")
+}
+
+fn settings_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("settings.json")
+}
+
+fn load_settings_from_dir(data_dir: &Path) -> Settings {
+    let path = settings_path(data_dir);
+    if let Ok(bytes) = fs::read(&path) {
+        if let Ok(s) = serde_json::from_slice::<Settings>(&bytes) {
+            return s;
+        }
+    }
+    Settings::default()
+}
+
+fn save_settings_to_dir(data_dir: &Path, s: &Settings) -> Result<()> {
+    let path = settings_path(data_dir);
+    let json = serde_json::to_vec_pretty(s)?;
+    fs::write(path, json).context("write settings")?;
+    Ok(())
 }
 
 async fn init_db(pool: &Pool<Sqlite>) -> Result<()> {
@@ -167,79 +393,42 @@ async fn init_db(pool: &Pool<Sqlite>) -> Result<()> {
     Ok(())
 }
 
-fn get_vault_key_bytes() -> Result<Vec<u8>> {
-    let entry = keyring::Entry::new(SERVICE_NAME, VAULT_KEY_LABEL)?;
-    let secret = entry.get_password().map_err(|_| anyhow!("vault not initialized"))?;
-    let key = B64.decode(secret).context("decode vault key")?;
-    if key.len() != 32 { return Err(anyhow!("invalid key length")); }
-    Ok(key)
-}
-
-fn ensure_vault_key() -> Result<bool> {
-    let entry = keyring::Entry::new(SERVICE_NAME, VAULT_KEY_LABEL)?;
-    match entry.get_password() {
-        Ok(_) => Ok(true),
-        Err(_) => Ok(false),
-    }
-}
-
-fn aes_encrypt(plaintext: &str) -> Result<Vec<u8>> {
-    let key = get_vault_key_bytes()?;
-    let cipher = Aes256Gcm::new_from_slice(&key).unwrap();
-    let mut nonce_bytes = [0u8; 12];
-    rand::thread_rng().fill_bytes(&mut nonce_bytes);
-    let nonce = Nonce::from_slice(&nonce_bytes);
-    let ct = cipher
-        .encrypt(nonce, plaintext.as_bytes())
-        .map_err(|e| anyhow!("encrypt failed: {e}"))?;
-    // Prepend nonce
-    let mut out = nonce_bytes.to_vec();
-    out.extend_from_slice(&ct);
-    Ok(out)
-}
-
-fn aes_decrypt(ciphertext: &[u8]) -> Result<String> {
-    if ciphertext.len() < 12 { return Err(anyhow!("ciphertext too short")); }
-    let key = get_vault_key_bytes()?;
-    let cipher = Aes256Gcm::new_from_slice(&key).unwrap();
-    let (nonce_bytes, ct) = ciphertext.split_at(12);
-    let nonce = Nonce::from_slice(nonce_bytes);
-    let pt = cipher
-        .decrypt(nonce, ct)
-        .map_err(|e| anyhow!("decrypt failed: {e}"))?;
-    String::from_utf8(pt).map_err(|e| anyhow!("utf8 error: {e}"))
-}
+// Note: Encryption disabled per user preference; store plaintext bytes on-device only.
 
 #[tauri::command]
 async fn health(state: tauri::State<'_, AppState>) -> Result<AppHealth, String> {
-    let has_vault_key = ensure_vault_key().unwrap_or(false);
     Ok(AppHealth {
         ok: true,
         data_dir: state.data_dir.display().to_string(),
         db_path: db_path(&state.data_dir).display().to_string(),
-        has_vault_key,
+        has_vault_key: true,
     })
 }
 
 #[tauri::command]
+async fn get_settings(state: tauri::State<'_, AppState>) -> Result<Settings, String> {
+    Ok(load_settings_from_dir(&state.data_dir))
+}
+
+#[tauri::command]
+async fn update_settings(state: tauri::State<'_, AppState>, settings: Settings) -> Result<Settings, String> {
+    save_settings_to_dir(&state.data_dir, &settings).map_err(|e| e.to_string())?;
+    Ok(settings)
+}
+
+#[tauri::command]
 fn init_vault() -> Result<(), String> {
-    let entry = keyring::Entry::new(SERVICE_NAME, VAULT_KEY_LABEL).map_err(|e| e.to_string())?;
-    if entry.get_password().is_ok() { return Ok(()); }
-    let mut key = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut key);
-    let encoded = B64.encode(key);
-    entry.set_password(&encoded).map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[tauri::command]
 fn encrypt(plaintext: String) -> Result<Vec<u8>, String> {
-    aes_encrypt(&plaintext).map_err(|e| e.to_string())
+    Ok(plaintext.into_bytes())
 }
 
 #[tauri::command]
 fn decrypt(cipher: Vec<u8>) -> Result<String, String> {
-    aes_decrypt(&cipher).map_err(|e| e.to_string())
+    String::from_utf8(cipher).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -392,13 +581,157 @@ async fn export_pdf(_state: tauri::State<'_, AppState>, _entry_id: String, _pane
 #[tauri::command]
 async fn create_comic_job(state: tauri::State<'_, AppState>, entry_id: String, style: String) -> Result<JobId, String> {
     let job_id = Uuid::new_v4().to_string();
+    state.comic_status.insert(job_id.clone(), ComicJobStatus {
+        job_id: job_id.clone(),
+        entry_id: entry_id.clone(),
+        style: style.clone(),
+        stage: ComicStage::Queued,
+        updated_at: now_iso(),
+        result_image_path: None,
+        storyboard_text: None,
+    });
+
+    let status_map = state.comic_status.clone();
+    let jid = job_id.clone();
+    let eid = entry_id.clone();
+    let st = style.clone();
+    let db_pool = state.db.clone();
+    let data_root = state.data_dir.clone();
     let handle = tokio::spawn(async move {
-        // Simulate work for now; frontend can listen to events later
-        let _ = (entry_id, style);
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        // Step 1: Parse entry (no-op placeholder)
+        status_map.insert(jid.clone(), ComicJobStatus {
+            job_id: jid.clone(),
+            entry_id: eid.clone(),
+            style: st.clone(),
+            stage: ComicStage::Parsing,
+            updated_at: now_iso(),
+            result_image_path: None,
+            storyboard_text: None,
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        // Step 2: Storyboard
+        status_map.insert(jid.clone(), ComicJobStatus {
+            job_id: jid.clone(),
+            entry_id: eid.clone(),
+            style: st.clone(),
+            stage: ComicStage::Storyboarding,
+            updated_at: now_iso(),
+            result_image_path: None,
+            storyboard_text: None,
+        });
+        // Load entry body for prompting
+        let entry_body: Result<String> = async {
+            let row = sqlx::query(
+                r#"SELECT body_cipher FROM entries WHERE id = ?1"#
+            )
+            .bind(&eid)
+            .fetch_one(&db_pool)
+            .await
+            .map_err(|e| anyhow!("db: {}", e))?;
+            let cipher: Vec<u8> = row.try_get("body_cipher").map_err(|e| anyhow!("row: {}", e))?;
+            let text = String::from_utf8(cipher).map_err(|e| anyhow!("utf8: {}", e))?;
+            Ok::<_, anyhow::Error>(text)
+        }.await;
+        if let Err(e) = entry_body {
+            status_map.insert(jid.clone(), ComicJobStatus {
+                job_id: jid.clone(),
+                entry_id: eid.clone(),
+                style: st.clone(),
+                stage: ComicStage::Failed { error: format!("load entry failed: {}", e) },
+                updated_at: now_iso(),
+                result_image_path: None,
+                storyboard_text: None,
+            });
+            return;
+        }
+        let entry_text = entry_body.unwrap_or_default();
+
+        // Step 3: Prompting (call nano-banana via Gemini)
+        status_map.insert(jid.clone(), ComicJobStatus {
+            job_id: jid.clone(),
+            entry_id: eid.clone(),
+            style: st.clone(),
+            stage: ComicStage::Prompting,
+            updated_at: now_iso(),
+            result_image_path: None,
+            storyboard_text: None,
+        });
+        // First: ask Ollama to write a concise storyboard
+        let ollama_prompt = format!(
+            "You are a helpful assistant that writes short 4-6 panel comic storyboards from journal entries.\\nJournal Entry:\\n{}\\n\\nOutput format strictly as lines:\\nPanel 1\\nCaption: <short caption>\\nPanel 2\\nCharacter 1: <dialogue>\\n...\\nKeep each caption/dialogue under 12 words.",
+            entry_text
+        );
+        let storyboard_outline: Result<String, String> = ollama_generate(None, ollama_prompt).await;
+        if let Err(e) = storyboard_outline {
+            status_map.insert(jid.clone(), ComicJobStatus {
+                job_id: jid.clone(),
+                entry_id: eid.clone(),
+                style: st.clone(),
+                stage: ComicStage::Failed { error: format!("ollama prompting failed: {}", e) },
+                updated_at: now_iso(),
+                result_image_path: None,
+                storyboard_text: None,
+            });
+            return;
+        }
+        let storyboard_text = storyboard_outline.unwrap_or_default();
+
+        // Step 4: Rendering (simulate 4 panels)
+        let total = 4u32;
+        for completed in 1..=total {
+            status_map.insert(jid.clone(), ComicJobStatus {
+                job_id: jid.clone(),
+                entry_id: eid.clone(),
+                style: st.clone(),
+                stage: ComicStage::Rendering { completed, total },
+                updated_at: now_iso(),
+                result_image_path: None,
+                storyboard_text: Some(storyboard_text.clone()),
+            });
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+
+        // Step 5: Saving
+        // Create tiny placeholder image to simulate output
+        let images_dir = data_root.join("images").join(&eid);
+        let _ = tokio::fs::create_dir_all(&images_dir).await;
+        let img_path = images_dir.join(format!("{}-result.png", &jid));
+        let png_bytes: &[u8] = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDAT\x08\x1d\x63\x60\x60\x60\x00\x00\x00\x05\x00\x01\x0d\n\x2d\xb4\x00\x00\x00\x00IEND\xaeB`\x82";
+        let _ = tokio::fs::write(&img_path, png_bytes).await;
+        status_map.insert(jid.clone(), ComicJobStatus {
+            job_id: jid.clone(),
+            entry_id: eid.clone(),
+            style: st.clone(),
+            stage: ComicStage::Saving,
+            updated_at: now_iso(),
+            result_image_path: Some(img_path.display().to_string()),
+            storyboard_text: Some(storyboard_text.clone()),
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        // Done
+        status_map.insert(jid.clone(), ComicJobStatus {
+            job_id: jid.clone(),
+            entry_id: eid.clone(),
+            style: st.clone(),
+            stage: ComicStage::Done,
+            updated_at: now_iso(),
+            result_image_path: Some(img_path.display().to_string()),
+            storyboard_text: Some(storyboard_text.clone()),
+        });
     });
     state.jobs.insert(job_id.clone(), handle);
     Ok(job_id)
+}
+
+#[tauri::command]
+async fn get_comic_job_status(state: tauri::State<'_, AppState>, job_id: String) -> Result<ComicJobStatus, String> {
+    state
+        .comic_status
+        .get(&job_id)
+        .map(|v| v.clone())
+        .ok_or_else(|| "job not found".to_string())
 }
 
 #[tauri::command]
@@ -430,7 +763,7 @@ fn tauri_startup() -> Result<AppState> {
         Ok::<_, anyhow::Error>(pool)
     })?;
 
-    Ok(AppState { db: pool, data_dir, jobs: Arc::new(DashMap::new()) })
+    Ok(AppState { db: pool, data_dir, jobs: Arc::new(DashMap::new()), comic_status: Arc::new(DashMap::new()) })
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -441,6 +774,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             health,
+            get_settings,
+            update_settings,
             init_vault,
             encrypt,
             decrypt,
@@ -450,7 +785,11 @@ pub fn run() {
             save_image_to_disk,
             export_pdf,
             create_comic_job,
-            cancel_job
+            get_comic_job_status,
+            cancel_job,
+            ollama_health,
+            ollama_list_models,
+            ollama_generate
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
