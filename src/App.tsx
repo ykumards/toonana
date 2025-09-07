@@ -375,10 +375,10 @@ export default function App() {
                     variant="secondary"
                     size="sm"
                     className="bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white border-0"
-                    title="Generate Comic"
+                    title="Cartoonify"
                   >
                     <Sparkles className="w-4 h-4" />
-                    <span className="hidden lg:inline">Make Comic</span>
+                    <span className="hidden lg:inline">Cartoonify</span>
                   </Button>
                 </div>
               </div>

@@ -124,7 +124,7 @@ export function EntriesSidebar({
               <BookOpen className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
             <div>
-              <h1 className="text-base sm:text-lg font-bold text-slate-900">Journal</h1>
+              <h1 className="text-base sm:text-lg font-bold text-slate-900">Toonana</h1>
               <p className="text-xs text-slate-500 hidden sm:block">{entries?.length || 0} entries</p>
             </div>
           </div>
