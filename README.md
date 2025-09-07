@@ -1,106 +1,152 @@
 # Toonana
 
-A secure, encrypted desktop journaling application built with Tauri, React, and Rust.
+Local-first journaling with AI-powered comic generation. Built with Tauri, React, and Rust.
 
 ## Overview
 
-Toonana is a personal journaling app that prioritizes privacy and security through client-side encryption. Write your thoughts in markdown, organize entries, and optionally generate comic visualizations of your journal entries.
+Toonana is a personal journaling app with a modern Markdown editor and a playful twist: turn entries into a single-image multi‑panel comic. The app runs as a desktop app via Tauri and stores your data locally.
 
 ## Features
 
-- **🔒 End-to-End Encryption**: All journal content encrypted with AES-256-GCM
-- **📝 Markdown Editor**: Rich text editing with live preview
-- **💾 Auto-Save**: Automatic saving with visual feedback
-- **⌨️ Keyboard Shortcuts**: Efficient workflow with hotkeys
-- **🎨 Comic Generation**: Transform entries into comic panels (coming soon)
-- **🔍 Search & Organization**: Find entries by title and metadata
-- **🛡️ Secure Storage**: Encryption keys stored in system keyring
+- **Markdown Editor**: Rich editor with preview
+- **Auto‑Save**: Automatic saving with clear status
+- **Keyboard Shortcuts**: Fast workflow (save/new/preview/search)
+- **Storyboarding (Ollama)**: Drafts a short 3–4 panel storyboard from your entry
+- **Comic Generation (Gemini / Nano‑Banana)**: Renders a single multi‑panel comic image
+- **Avatar Cartoonify**: Upload a photo to generate a cartoon avatar
+- **Gallery**: Browse generated comics by day
+- **Search & Organization**: Quick filter by entry preview text
+- **Local‑first Storage**: Data stored on your machine
+
+Note on security: this hackathon build uses a simplified crypto path; encryption APIs are currently stubbed. Do not store highly sensitive information.
 
 ## Tech Stack
 
-- **Frontend**: React 19, TypeScript, Vite, TanStack Query, Zustand
-- **Backend**: Rust with Tauri v2
-- **Database**: SQLite with SQLx
-- **Encryption**: AES-GCM with system keyring integration
-- **Styling**: Tailwind CSS with custom design system
+- **Frontend**: React 19, TypeScript, Vite, TanStack Query, Zustand, Radix UI, Framer Motion
+- **Desktop**: Tauri v2
+- **Backend**: Rust (Tauri commands)
+- **Database**: SQLite (SQLx)
+- **Styling**: Tailwind CSS
+- **AI**:
+  - Storyboarding via Ollama (local LLM)
+  - Image generation via Gemini (API key) or Nano‑Banana (optional service)
 
-## Development
+## Getting Started
 
 ### Prerequisites
 
-- Node.js (18+) and pnpm
-- Rust (latest stable)
-- Platform-specific Tauri dependencies
+- Node.js 18+ (Node 20 recommended) and pnpm
+- Rust (stable) and platform prerequisites for Tauri
+  - macOS: Xcode Command Line Tools (`xcode-select --install`)
+  - Linux: `libgtk-3-dev` and other GTK/WebKit deps
+  - Windows: Visual Studio Build Tools (Desktop C++)
+  - See Tauri’s platform setup docs for details
 
 ### Setup
 
-1. Clone the repository
-2. Install frontend dependencies:
-   ```bash
-   pnpm install
-   ```
-3. Install Rust dependencies:
-   ```bash
-   cd src-tauri && cargo build
-   ```
-
-### Commands
+1. Install dependencies
 
 ```bash
-# Development (frontend only)
-pnpm dev
+pnpm install
+```
 
-# Development (full Tauri app)
+1. Run the app (Tauri dev)
+
+```bash
 pnpm tauri dev
+```
 
-# Build frontend with type checking
-pnpm build
+1. Build a release bundle
 
-# Build complete application
+```bash
 pnpm tauri build
+# Artifacts: src-tauri/target/release/bundle/*
+```
 
-# Run backend tests
+Optional: Run frontend only
+
+```bash
+pnpm dev
+```
+
+Run backend tests
+
+```bash
 cd src-tauri && cargo test
 ```
 
-### Architecture
+### Configuration (Settings)
 
-#### Frontend Structure
+Open Settings in the app to configure:
+
+- **Gemini API Key**: Required for image generation unless using Nano‑Banana.
+- **Ollama Base URL**: Default `http://127.0.0.1:11434`.
+- **Default Ollama Model**: e.g., `gemma3:1b` (see list via Refresh).
+- **Temperature / Top‑P**: Sampling parameters for Ollama prompts.
+- **Nano‑Banana**: Optional service for image generation
+  - Base URL and optional API key.
+
+Environment variable alternative:
+
+- `GEMINI_API_KEY` can be set in your shell; the app will use it if no key is saved in Settings.
+
+## Architecture
+
+### Frontend
+
 - **`src/App.tsx`**: Main application component managing state and UI
 - **`src/components/`**: Reusable UI components
   - `EntriesSidebar`: Navigation and entry list
   - `MarkdownEditor`: Content editing with preview
+  - `SettingsModal`: Configure providers and parameters
+  - `ComicProgressModal`: Live progress while rendering
+  - `GalleryModal`: Browse generated comics by day
+  - `AvatarModal`: Cartoonify and set your avatar
 - **`src/hooks/`**: Custom React hooks
   - `useAutosave`: Automatic saving functionality
   - `useKeyboardShortcuts`: Global hotkey handling
 
-#### Backend Structure
-- **`src-tauri/src/lib.rs`**: Core application logic and Tauri commands
-- **Database Schema**:
-  - `entries`: Main journal entries with encrypted content
-  - `storyboards`: Comic generation metadata
-  - `panels`: Individual comic panels
-  - `assets`: File attachments and images
+### Backend
 
-#### Security Model
-1. **Key Generation**: 256-bit keys generated on first run
-2. **Key Storage**: Keys stored securely in system keyring
-3. **Field Encryption**: Only sensitive content (entry body) is encrypted
-4. **Local Storage**: All data stored locally in SQLite database
+- **`src-tauri/src/lib.rs`**: Tauri commands, job orchestration, logging
+- **`src-tauri/src/comic.rs`**: Comic job pipeline (storyboard → render → save)
+- **`src-tauri/src/ollama.rs`**: Ollama health, list models, text generation
+- **`src-tauri/src/gemini.rs`**: Gemini image generation (streaming + fallback)
+- **`src-tauri/src/database.rs`**: SQLite schema and queries
+- **`src-tauri/src/utils.rs`**: Data dir and DB path helpers
 
-### Keyboard Shortcuts
+### Data model (SQLite)
+
+- `entries`: journal entries (body stored as bytes in `body_cipher`)
+- `storyboards`: stored storyboard metadata
+- `panels`: panel metadata and generated images
+- `assets`: future attachments
+
+Security note: encryption is currently stubbed in this build; data is stored locally without full at‑rest encryption.
+
+## Keyboard Shortcuts
 
 - **Cmd/Ctrl + S**: Save current entry
 - **Cmd/Ctrl + N**: Create new entry
 - **Cmd/Ctrl + E**: Toggle preview mode
 - **Cmd/Ctrl + K**: Focus search
 
-### Data Location
+## Data Location
 
-Application data is stored in platform-specific directories:
-- **macOS**: `~/Library/Application Support/toonana/toonana/`
-- **Windows**: `%APPDATA%\toonana\toonana\`
-- **Linux**: `~/.local/share/toonana/toonana/`
+Application data is stored in platform-specific directories (Directories crate):
+
+- **macOS**: `~/Library/Application Support/app.toonana.toonana/`
+- **Windows**: `%APPDATA%\app\toonana\toonana\`
+- **Linux**: `~/.local/share/app/toonana/toonana/`
+
+Generated images are saved under `images/<entry_id>/` inside the data directory. Avatars are stored under `avatars/`.
+
+Logs are written to `logs/toonana.log` in the data directory.
+
+## Submission (Hackathon)
+
+- **Demo Video (≤ 2 minutes)**: Publicly accessible link (no login required)
+  - Link: [YouTube Demo](https://youtu.be/va_8D2urgOk)
 
 ## Contributing
 
@@ -116,4 +162,4 @@ This project is licensed under the MIT License.
 
 ## IDE Setup
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+- Zed editor (preferred) + Tauri + rust-analyzer (or VS Code + Tauri + rust-analyzer)
